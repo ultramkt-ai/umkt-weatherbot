@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+
+# Dados sensíveis e runtime
+data/*.db
+data/*.sqlite
+data_runtime/state/*.json
+data_runtime/logs/*.log
+data_runtime/reports/*.json
+data_runtime/trades/*.json
+*.sqlite3
+
+# Logs
+logs/
+*.log
+
+# Ambiente
+.env
+.env.local
+*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Específico Weather Bot
+data/positions.db
+data_runtime/state/bot_state.json
+data_runtime/state/*_state.json
+data_runtime/state/strategies/
+data_runtime/reports/
+data_runtime/logs/
+messaging/logs/
