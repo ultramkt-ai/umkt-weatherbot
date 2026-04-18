@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import datetime, timedelta
 import signal
 
 from config import load_config
@@ -19,6 +19,15 @@ class CycleTimeoutError(TimeoutError):
 
 def _timeout_handler(signum, frame):
     raise CycleTimeoutError("Market scan cycle exceeded the configured timeout.")
+
+
+def _is_due(next_run_iso: str | None, now_value: datetime) -> bool:
+    if not next_run_iso:
+        return True
+    try:
+        return datetime.fromisoformat(next_run_iso) <= now_value
+    except Exception:
+        return True
 
 
 def main() -> None:
@@ -45,33 +54,39 @@ def main() -> None:
         state.last_cycle_started_at = now_iso()
         state = refresh_bot_mode(state)
         closed_main_trades = []
+        closed_trades = []
+        now = now_dt()
+        market_scan_due = state.can_open_new_trades and _is_due(state.next_market_scan_at, now)
+        open_trades_due = state.can_monitor_open_trades and _is_due(state.next_open_trades_check_at, now)
 
-        if state.can_open_new_trades:
+        if market_scan_due:
             state = run_market_scan_cycle(state, config)
+            state.last_market_scan_at = now_iso()
 
-        if state.can_monitor_open_trades:
+        if open_trades_due:
             state, closed_main_trades = monitor_open_trades(state, config, now_iso())
 
-        # Monitora trades abertas e fecha posições por TP/SL/Time-out
-        _, closed_trades = monitor_strategy_open_trades(config)
-        if closed_trades:
-            closed_ids = {trade["trade_id"] for trade in closed_trades}
-            state.open_trades = [t for t in state.open_trades if t.trade_id not in closed_ids]
-            state.open_trades_count = len(state.open_trades)
-            state.closed_trades_count += len(closed_trades)
-            state.current_cash_usd += sum(float(trade.get("gross_settlement_value_usd") or 0.0) for trade in closed_trades)
-            state.realized_pnl_total_usd += sum(float(trade.get("net_pnl_abs") or 0.0) for trade in closed_trades)
-            state.capital_alocado_aberto_usd = sum(t.capital_alocado_usd for t in state.open_trades)
-            state.gross_exposure_open_usd = state.capital_alocado_aberto_usd
-            state.current_bankroll_usd = state.current_cash_usd + state.capital_alocado_aberto_usd
-            state.open_exposure_pct = (state.gross_exposure_open_usd / state.current_bankroll_usd) if state.current_bankroll_usd else 0.0
+            # Monitora trades abertas e fecha posições por TP/SL/Time-out
+            _, closed_trades = monitor_strategy_open_trades(config)
+            if closed_trades:
+                closed_ids = {trade["trade_id"] for trade in closed_trades}
+                state.open_trades = [t for t in state.open_trades if t.trade_id not in closed_ids]
+                state.open_trades_count = len(state.open_trades)
+                state.closed_trades_count += len(closed_trades)
+                state.current_cash_usd += sum(float(trade.get("gross_settlement_value_usd") or 0.0) for trade in closed_trades)
+                state.realized_pnl_total_usd += sum(float(trade.get("net_pnl_abs") or 0.0) for trade in closed_trades)
+                state.capital_alocado_aberto_usd = sum(t.capital_alocado_usd for t in state.open_trades)
+                state.gross_exposure_open_usd = state.capital_alocado_aberto_usd
+                state.current_bankroll_usd = state.current_cash_usd + state.capital_alocado_aberto_usd
+                state.open_exposure_pct = (state.gross_exposure_open_usd / state.current_bankroll_usd) if state.current_bankroll_usd else 0.0
 
-        if state.can_monitor_open_trades and closed_main_trades:
             state.last_open_trades_check_at = now_iso()
 
         now = now_dt()
-        state.next_market_scan_at = (now + timedelta(minutes=config.scheduling.market_scan_interval_min)).isoformat()
-        state.next_open_trades_check_at = (now + timedelta(minutes=config.scheduling.open_trades_check_interval_min)).isoformat()
+        if market_scan_due:
+            state.next_market_scan_at = (now + timedelta(minutes=config.scheduling.market_scan_interval_min)).isoformat()
+        if open_trades_due:
+            state.next_open_trades_check_at = (now + timedelta(minutes=config.scheduling.open_trades_check_interval_min)).isoformat()
 
         status_message = build_cycle_status_message(state)
         state.last_cycle_status_message = status_message

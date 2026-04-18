@@ -76,12 +76,12 @@ class MarketConfig:
 
 @dataclass(frozen=True)
 class SchedulingConfig:
-    market_scan_interval_min: int = 5
-    open_trades_check_interval_min: int = 5
-    near_resolution_check_interval_min: int = 3
-    final_hour_check_interval_min: int = 1
-    near_resolution_hours: int = 6
-    final_hour_hours: int = 1
+    market_scan_interval_min: int = int(os.getenv("SCHEDULING_MARKET_SCAN_INTERVAL_MIN", "5"))
+    open_trades_check_interval_min: int = int(os.getenv("SCHEDULING_OPEN_TRADES_CHECK_INTERVAL_MIN", "2"))
+    near_resolution_check_interval_min: int = int(os.getenv("SCHEDULING_NEAR_RESOLUTION_CHECK_INTERVAL_MIN", "3"))
+    final_hour_check_interval_min: int = int(os.getenv("SCHEDULING_FINAL_HOUR_CHECK_INTERVAL_MIN", "1"))
+    near_resolution_hours: int = int(os.getenv("SCHEDULING_NEAR_RESOLUTION_HOURS", "6"))
+    final_hour_hours: int = int(os.getenv("SCHEDULING_FINAL_HOUR_HOURS", "1"))
 
 
 @dataclass(frozen=True)

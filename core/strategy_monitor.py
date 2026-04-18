@@ -25,18 +25,18 @@ EXIT_RULES = {
 }
 
 
-def _should_close_trade(strategy_id: str, open_trade: OpenTrade, now_iso_value: str, marked_roi: float) -> bool:
+def _should_close_trade(strategy_id: str, open_trade: OpenTrade, now_iso_value: str, marked_roi: float) -> tuple[bool, str | None]:
     entry_dt = datetime.fromisoformat(open_trade.entry_time)
     now_dt_value = datetime.fromisoformat(now_iso_value)
     hold_hours = (now_dt_value - entry_dt).total_seconds() / 3600
     rules = EXIT_RULES.get(strategy_id, {'tp': 0.10, 'sl': -0.10, 'time_hours': 6})
     if marked_roi >= rules['tp']:
-        return True
+        return True, 'tp_hit'
     if marked_roi <= rules['sl']:
-        return True
+        return True, 'sl_hit'
     if hold_hours >= rules['time_hours']:
-        return True
-    return False
+        return True, 'time_stop'
+    return False, None
 
 
 def _position_mark_from_yes_price(side: str, yes_price: float) -> float:
@@ -76,7 +76,7 @@ def _mark_trade_to_market(config: Config, open_trade: OpenTrade, clob_client: Po
     return (open_trade.entry_price, 'entry_price_fallback_mark')
 
 
-def _close_trade(config: Config, open_trade: OpenTrade, now_iso_value: str, clob_client: PolymarketClobClient, polymarket_client: PolymarketClient) -> ClosedTrade:
+def _close_trade(config: Config, open_trade: OpenTrade, now_iso_value: str, clob_client: PolymarketClobClient, polymarket_client: PolymarketClient, exit_reason: str | None = None) -> ClosedTrade:
     resolution_value, source = _mark_trade_to_market(config, open_trade, clob_client, polymarket_client)
     gross_settlement_value = open_trade.contracts_qty * resolution_value
     net_pnl_abs = gross_settlement_value - open_trade.net_cost_usd
@@ -112,6 +112,7 @@ def _close_trade(config: Config, open_trade: OpenTrade, now_iso_value: str, clob
         resolution_source=source,
         resolution_source_value=resolution_value,
         drawdown_after_close=0.0,
+        exit_reason=exit_reason,
     )
 
 
@@ -130,10 +131,11 @@ def monitor_strategy_open_trades(config: Config) -> tuple[dict[str, Any], list[d
             gross_settlement_value = open_trade.contracts_qty * resolution_value
             net_pnl_abs = gross_settlement_value - open_trade.net_cost_usd
             marked_roi = net_pnl_abs / open_trade.capital_alocado_usd if open_trade.capital_alocado_usd else 0.0
-            if not _should_close_trade(strategy.strategy_id, open_trade, now_value, marked_roi):
+            should_close, exit_reason = _should_close_trade(strategy.strategy_id, open_trade, now_value, marked_roi)
+            if not should_close:
                 remaining_open.append(open_trade)
                 continue
-            closed_trade = _close_trade(config, open_trade, now_value, clob_client, polymarket_client)
+            closed_trade = _close_trade(config, open_trade, now_value, clob_client, polymarket_client, exit_reason=exit_reason)
             state = apply_closed_trade_to_state(state, closed_trade)
             payload = asdict(closed_trade)
             closed_payloads.append(payload)
