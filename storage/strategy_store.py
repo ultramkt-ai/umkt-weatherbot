@@ -107,11 +107,12 @@ def _normalize_strategy_state(state: BotState) -> BotState:
     state.open_trades = unique_trades
     state.open_trade_ids = [trade.trade_id for trade in unique_trades]
     state.open_trades_count = len(unique_trades)
-    state.approved_trades_count = len(unique_trades)
-    state.approved_today = len(unique_trades)
     state.capital_alocado_aberto_usd = sum(trade.capital_alocado_usd for trade in unique_trades)
     state.gross_exposure_open_usd = sum(trade.capital_alocado_usd for trade in unique_trades)
-    state.current_cash_usd = max(0.0, state.initial_bankroll_usd - sum(trade.net_cost_usd for trade in unique_trades))
+    state.current_cash_usd = max(
+        0.0,
+        state.initial_bankroll_usd + state.realized_pnl_total_usd - sum(trade.net_cost_usd for trade in unique_trades),
+    )
     state.current_bankroll_usd = state.current_cash_usd + state.capital_alocado_aberto_usd
     state.open_exposure_pct = calculate_open_exposure_pct(state.capital_alocado_aberto_usd, state.current_bankroll_usd)
     state.cluster_exposure_map_usd = {}
