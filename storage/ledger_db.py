@@ -13,6 +13,7 @@ from utils.time_utils import now_dt
 
 MAIN_STRATEGY_ID = "WEATHER_BOT_MAIN"
 COPYTRADING_STRATEGY_ID = "COPYTRADING_COLDMATH"
+_LEGACY_MIGRATION_DONE = False
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -297,6 +298,10 @@ def build_strategy_snapshot(config: Config, strategy_id: str, initial_bankroll_u
 
 
 def migrate_legacy_trade_data(config: Config) -> None:
+    global _LEGACY_MIGRATION_DONE
+    if _LEGACY_MIGRATION_DONE:
+        return
+
     ensure_schema(config)
     from storage.json_store import read_json_file
 
@@ -320,6 +325,7 @@ def migrate_legacy_trade_data(config: Config) -> None:
         if trade.get("trade_id"):
             record_closed_trade(config, COPYTRADING_STRATEGY_ID, trade)
     normalize_copytrading_fills(config)
+    _LEGACY_MIGRATION_DONE = True
 
 
 def normalize_copytrading_fills(config: Config) -> None:

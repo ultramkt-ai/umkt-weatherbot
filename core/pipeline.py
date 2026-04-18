@@ -15,6 +15,7 @@ from core.paper_broker import create_open_trade
 from core.portfolio import apply_open_trade_to_state
 from core.risk_manager import evaluate_portfolio_protection
 from core.scanner import scan_weather_us_markets
+from core.state_machine import refresh_bot_mode
 from data.alerts_client import AlertsClient
 from data.geocoding_client import GeocodingClient
 from data.polymarket_client import PolymarketClient
@@ -365,6 +366,8 @@ def run_market_scan_cycle(state: BotState, config: Config) -> BotState:
         state.daily_stop_active = protection_reason == "daily_stop_limit"
         state.weekly_stop_active = protection_reason == "weekly_stop_limit"
         state.kill_switch_active = protection_reason == "kill_switch_limit"
+        state = refresh_bot_mode(state)
+        return state
     else:
         state.can_open_new_trades = True
         state.daily_stop_active = False
@@ -372,6 +375,7 @@ def run_market_scan_cycle(state: BotState, config: Config) -> BotState:
         state.kill_switch_active = False
         if state.pause_reason in {"daily_stop_limit", "weekly_stop_limit", "kill_switch_limit"}:
             state.pause_reason = None
+        state = refresh_bot_mode(state)
 
     client = PolymarketClient(config)
     clob_client = PolymarketClobClient(config)

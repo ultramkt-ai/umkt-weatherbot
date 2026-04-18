@@ -83,13 +83,16 @@ def main() -> None:
         print(status_message)
     except CycleTimeoutError:
         message = f"Run aborted: cycle timeout after {timeout_seconds}s."
+        timeout_at = now_dt()
         state.last_error_code = "cycle_timeout"
-        state.last_error_at = now_iso()
-        state.last_cycle_finished_at = now_iso()
+        state.last_error_at = timeout_at.isoformat()
+        state.last_cycle_finished_at = timeout_at.isoformat()
         state.last_cycle_status_message = message
+        state.next_market_scan_at = (timeout_at + timedelta(minutes=config.scheduling.market_scan_interval_min)).isoformat()
+        state.next_open_trades_check_at = (timeout_at + timedelta(minutes=config.scheduling.open_trades_check_interval_min)).isoformat()
         save_state(config, state)
         log_runtime_event(config, {
-            "timestamp": now_iso(),
+            "timestamp": timeout_at.isoformat(),
             "event": "market_scan_cycle_timeout",
             "timeout_seconds": timeout_seconds,
             "message": message,
