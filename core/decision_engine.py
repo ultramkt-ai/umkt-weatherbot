@@ -12,14 +12,14 @@ from models.weather import WeatherContext
 def validate_weather_context(weather: WeatherContext | None) -> str | None:
     if weather is None:
         return "weather_context_unavailable"
-    if not weather.data_quality_ok:
-        return "missing_weather_data"
-    if weather.severe_alert_flag:
-        return "weather_alert"
     if weather.extreme_weather_flag:
         return "extreme_weather_risk"
+    if weather.severe_alert_flag:
+        return "weather_alert"
     if weather.instability_flag:
-        return "forecast_instability"
+        return weather.blocking_reason or "forecast_instability"
+    if not weather.data_quality_ok:
+        return weather.blocking_reason or "missing_weather_data"
     return None
 
 

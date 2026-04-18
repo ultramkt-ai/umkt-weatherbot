@@ -24,3 +24,6 @@ class WeatherContext:
     instability_flag: bool
     data_quality_ok: bool
     notes: Optional[str] = None
+    alert_headline: Optional[str] = None
+    blocking_reason: Optional[str] = None
+    raw_alert_count: int = 0

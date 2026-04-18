@@ -168,7 +168,7 @@ def _build_weather_context(
 
     secondary_started = perf_counter()
     try:
-        timings_ms["secondary_forecast_cache_hit"] = timings_ms.get("primary_forecast_cache_hit", 0.0)
+        timings_ms["secondary_forecast_cache_hit"] = 1.0 if weather_client.is_secondary_cached(market, geocoding["latitude"], geocoding["longitude"]) else 0.0
         secondary_forecast = weather_client.fetch_secondary_forecast(market, geocoding["latitude"], geocoding["longitude"])
         timings_ms["secondary_forecast"] = round((perf_counter() - secondary_started) * 1000, 2)
     except Exception as exc:
@@ -185,15 +185,6 @@ def _build_weather_context(
     try:
         alert_summary = alerts_client.fetch_alerts(geocoding["latitude"], geocoding["longitude"])
         timings_ms["alerts"] = round((perf_counter() - alerts_started) * 1000, 2)
-    except NotImplementedError:
-        timings_ms["alerts"] = round((perf_counter() - alerts_started) * 1000, 2)
-        alert_summary = {
-            "source_name": "alerts-stub",
-            "severe_alert_flag": False,
-            "extreme_weather_flag": False,
-            "instability_flag": False,
-            "headline": None,
-        }
     except Exception as exc:
         timings_ms["alerts"] = round((perf_counter() - alerts_started) * 1000, 2)
         raise WeatherContextBuildError(
@@ -674,6 +665,12 @@ def run_market_scan_cycle(state: BotState, config: Config) -> BotState:
                     "ask_levels": market.ask_levels,
                     "resolution_time": market.resolution_time,
                     "weather_data_quality_ok": getattr(weather, "data_quality_ok", None) if weather else None,
+                    "weather_primary_source": getattr(weather, "primary_source_name", None) if weather else None,
+                    "weather_secondary_source": getattr(weather, "secondary_source_name", None) if weather else None,
+                    "weather_alert_source": getattr(weather, "alert_source_name", None) if weather else None,
+                    "weather_alert_headline": getattr(weather, "alert_headline", None) if weather else None,
+                    "weather_blocking_reason": getattr(weather, "blocking_reason", None) if weather else None,
+                    "weather_raw_alert_count": getattr(weather, "raw_alert_count", None) if weather else None,
                     "weather_severe_alert_flag": getattr(weather, "severe_alert_flag", None) if weather else None,
                     "weather_extreme_flag": getattr(weather, "extreme_weather_flag", None) if weather else None,
                     "weather_instability_flag": getattr(weather, "instability_flag", None) if weather else None,

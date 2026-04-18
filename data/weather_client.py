@@ -1,6 +1,7 @@
 import json
 from datetime import datetime
 from threading import Lock
+from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
@@ -45,12 +46,14 @@ class WeatherClient:
 
         threshold_distance = self._threshold_distance(outcome, primary_value)
         range_buffer_value = max(1.0, range_width / 2)
+        blocking_reason = alert_summary.get("blocking_reason")
+        data_quality_ok = True
 
         return WeatherContext(
             market_id=market.market_id,
             primary_source_name=primary_forecast.get("source_name", "open-meteo"),
-            secondary_source_name=secondary_forecast.get("source_name", "open-meteo-secondary"),
-            alert_source_name=alert_summary.get("source_name", "alerts-stub"),
+            secondary_source_name=secondary_forecast.get("source_name", "weatherapi-forecast"),
+            alert_source_name=alert_summary.get("source_name", "weatherapi-alerts"),
             latitude=float(geocoding["latitude"]),
             longitude=float(geocoding["longitude"]),
             primary_forecast_value=primary_value,
@@ -65,8 +68,11 @@ class WeatherClient:
             severe_alert_flag=bool(alert_summary.get("severe_alert_flag", False)),
             extreme_weather_flag=bool(alert_summary.get("extreme_weather_flag", False)),
             instability_flag=bool(alert_summary.get("instability_flag", False)),
-            data_quality_ok=True,
-            notes=alert_summary.get("headline"),
+            data_quality_ok=data_quality_ok,
+            notes=alert_summary.get("headline") or blocking_reason,
+            alert_headline=alert_summary.get("headline"),
+            blocking_reason=blocking_reason,
+            raw_alert_count=int(alert_summary.get("raw_alert_count") or 0),
         )
 
     def _threshold_distance(self, outcome: TemperatureOutcomeCandidate, forecast_value: float) -> float:
@@ -86,9 +92,8 @@ class WeatherClient:
 
     def fetch_primary_forecast(self, market: TemperatureMarket, latitude: float, longitude: float) -> dict:
         start_date = self._market_date_iso(market)
-        cache_key = f"{market.city}|{latitude:.4f}|{longitude:.4f}|{start_date}"
-        with self._cache_lock:
-            cached = self._cache.get(cache_key)
+        cache_key = self._forecast_cache_key("primary", market, latitude, longitude, start_date)
+        cached = self._get_cached(cache_key)
         if cached is not None:
             return cached
 
@@ -117,21 +122,73 @@ class WeatherClient:
             "range_low": min(temps),
             "range_high": max(temps),
             "unit": "celsius",
+            "forecast_target_date": start_date,
         }
-        with self._cache_lock:
-            self._cache[cache_key] = normalized
-            atomic_write_json(self._cache_file, self._cache)
+        self._set_cached(cache_key, normalized)
         return normalized
 
     def fetch_secondary_forecast(self, market: TemperatureMarket, latitude: float, longitude: float) -> dict:
-        primary = self.fetch_primary_forecast(market, latitude, longitude)
-        return {
-            "source_name": "open-meteo-secondary",
-            "forecast_value": primary["forecast_value"],
-            "range_low": primary["range_low"],
-            "range_high": primary["range_high"],
-            "unit": primary["unit"],
+        if not self.config.api.weatherapi_key:
+            raise ValueError("WEATHERAPI_KEY ausente. Não é possível consultar forecast secundário real.")
+
+        start_date = self._market_date_iso(market)
+        cache_key = self._forecast_cache_key("secondary", market, latitude, longitude, start_date)
+        cached = self._get_cached(cache_key)
+        if cached is not None:
+            return cached
+
+        params = {
+            "key": self.config.api.weatherapi_key,
+            "q": f"{latitude:.6f},{longitude:.6f}",
+            "days": 1,
+            "dt": start_date,
+            "alerts": "no",
+            "aqi": "no",
         }
+        url = f"{self.config.api.weatherapi_base_url.rstrip('/')}/v1/forecast.json?{urlencode(params)}"
+        request = Request(url, headers={"Accept": "application/json", "User-Agent": "weather-bot-mvp/0.1"})
+
+        try:
+            with urlopen(request, timeout=20) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            detail = self._extract_api_error(body)
+            raise ValueError(f"WeatherAPI forecast falhou ({exc.code}): {detail}") from exc
+
+        if payload.get("error"):
+            raise ValueError(f"WeatherAPI forecast retornou erro: {payload['error']}")
+
+        forecast_days = ((payload.get("forecast") or {}).get("forecastday") or [])
+        if not forecast_days:
+            raise ValueError(f"WeatherAPI returned no forecastday data for {market.city} on {start_date}")
+
+        target = None
+        for item in forecast_days:
+            if item.get("date") == start_date:
+                target = item
+                break
+        if target is None:
+            target = forecast_days[0]
+
+        day = target.get("day") or {}
+        maxtemp_c = day.get("maxtemp_c")
+        mintemp_c = day.get("mintemp_c")
+        avgtemp_c = day.get("avgtemp_c")
+        if maxtemp_c is None or mintemp_c is None:
+            raise ValueError(f"WeatherAPI returned incomplete daily forecast for {market.city} on {start_date}")
+
+        normalized = {
+            "source_name": "weatherapi-forecast",
+            "forecast_value": float(maxtemp_c),
+            "range_low": float(mintemp_c),
+            "range_high": float(maxtemp_c),
+            "unit": "celsius",
+            "forecast_target_date": target.get("date", start_date),
+            "avgtemp_c": float(avgtemp_c) if avgtemp_c is not None else None,
+        }
+        self._set_cached(cache_key, normalized)
+        return normalized
 
     def _market_date_iso(self, market: TemperatureMarket) -> str:
         parsed = datetime.strptime(f"{market.event_date_label} 2026", "%B %d %Y")
@@ -139,6 +196,36 @@ class WeatherClient:
 
     def is_primary_cached(self, market: TemperatureMarket, latitude: float, longitude: float) -> bool:
         start_date = self._market_date_iso(market)
-        cache_key = f"{market.city}|{latitude:.4f}|{longitude:.4f}|{start_date}"
+        cache_key = self._forecast_cache_key("primary", market, latitude, longitude, start_date)
+        return self._is_cached(cache_key)
+
+    def is_secondary_cached(self, market: TemperatureMarket, latitude: float, longitude: float) -> bool:
+        start_date = self._market_date_iso(market)
+        cache_key = self._forecast_cache_key("secondary", market, latitude, longitude, start_date)
+        return self._is_cached(cache_key)
+
+    def _forecast_cache_key(self, kind: str, market: TemperatureMarket, latitude: float, longitude: float, start_date: str) -> str:
+        return f"{kind}|{market.city}|{latitude:.4f}|{longitude:.4f}|{start_date}"
+
+    def _get_cached(self, cache_key: str) -> dict | None:
+        with self._cache_lock:
+            return self._cache.get(cache_key)
+
+    def _set_cached(self, cache_key: str, value: dict) -> None:
+        with self._cache_lock:
+            self._cache[cache_key] = value
+            atomic_write_json(self._cache_file, self._cache)
+
+    def _is_cached(self, cache_key: str) -> bool:
         with self._cache_lock:
             return cache_key in self._cache
+
+    def _extract_api_error(self, body: str) -> str:
+        try:
+            payload = json.loads(body)
+        except Exception:
+            return body[:300]
+        error = payload.get("error")
+        if not error:
+            return body[:300]
+        return str(error)
