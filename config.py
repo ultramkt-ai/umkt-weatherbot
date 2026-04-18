@@ -26,7 +26,7 @@ class RiskConfig:
     initial_bankroll_usd: float = 10_000.0
     risk_per_trade_pct: float = float(os.getenv("RISK_PER_TRADE_PCT", "0.01"))
     max_total_exposure_pct: float = float(os.getenv("RISK_MAX_TOTAL_EXPOSURE_PCT", "0.10"))
-    max_open_trades: int = int(os.getenv("RISK_MAX_OPEN_TRADES", "8"))
+    max_open_trades: int = int(os.getenv("RISK_MAX_OPEN_TRADES", "30"))
     max_cluster_exposure_pct: float = float(os.getenv("RISK_MAX_CLUSTER_EXPOSURE_PCT", "0.03"))
     max_trades_per_cluster: int = int(os.getenv("RISK_MAX_TRADES_PER_CLUSTER", "3"))
     daily_stop_pct: float = float(os.getenv("RISK_DAILY_STOP_PCT", "-0.04"))
@@ -97,7 +97,7 @@ class RuntimeConfig:
     debug_timing: bool = os.getenv("RUNTIME_DEBUG_TIMING", "false").lower() == "true"
     max_candidates_per_cycle: int = int(os.getenv("RUNTIME_MAX_CANDIDATES_PER_CYCLE", "120"))
     weather_parallel_workers: int = int(os.getenv("RUNTIME_WEATHER_PARALLEL_WORKERS", "6"))
-    cycle_timeout_seconds: int = int(os.getenv("RUNTIME_CYCLE_TIMEOUT_SECONDS", "180"))
+    cycle_timeout_seconds: int = int(os.getenv("RUNTIME_CYCLE_TIMEOUT_SECONDS", "240"))
     copytrading_max_fill_brl: float = float(os.getenv("COPYTRADING_MAX_FILL_BRL", "100"))
     usd_brl_rate: float = float(os.getenv("USD_BRL_RATE", "5.0"))
 

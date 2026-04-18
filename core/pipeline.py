@@ -508,12 +508,17 @@ def run_market_scan_cycle(state: BotState, config: Config) -> BotState:
 
             prepared_markets.append(market)
 
+            market_token_ids = [
+                outcome.token_id for outcome in market.outcomes
+                if outcome.token_id and not any(open_trade.token_id == outcome.token_id for open_trade in state.open_trades)
+            ]
+            market_book_map = clob_client.get_book_map(market_token_ids)
+
             for outcome in market.outcomes:
                 if outcome.token_id and any(open_trade.token_id == outcome.token_id for open_trade in state.open_trades):
                     continue
 
-                book_map = clob_client.get_book_map([outcome.token_id] if outcome.token_id else [])
-                book = book_map.get(outcome.token_id or "")
+                book = market_book_map.get(outcome.token_id or "")
                 if book:
                     bids = book.get("bids") or []
                     asks = book.get("asks") or []
