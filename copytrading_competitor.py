@@ -10,8 +10,7 @@ from data.polymarket_data_client import PolymarketDataClient
 from models.trade import ClosedTrade, OpenTrade
 from models.state import BotState
 from models.serialization import dataclass_to_dict
-from storage.ledger_db import COPYTRADING_STRATEGY_ID, build_strategy_snapshot, list_closed_trades, list_open_positions, list_open_trades, migrate_legacy_trade_data, record_closed_trade, record_open_trade, remove_open_trade
-from storage.strategy_journal import log_strategy_invalidation
+from storage.ledger_db import COPYTRADING_STRATEGY_ID, build_strategy_snapshot, list_closed_trades, list_open_positions, list_open_trades, migrate_legacy_trade_data, record_closed_trade, record_open_trade
 from utils.ids import generate_session_id
 from utils.math_utils import calculate_drawdown_pct
 from utils.time_utils import now_iso
@@ -141,23 +140,6 @@ def _remote_positions_to_state_map(wallet_positions: list[dict]) -> dict[str, di
     }
 
 
-def _list_all_remote_positions(client: PolymarketDataClient, wallet: str, page_size: int = 500, max_pages: int = 20) -> list[dict]:
-    positions: list[dict] = []
-    offset = 0
-    for _ in range(max_pages):
-        try:
-            batch = client.list_positions(user=wallet, limit=page_size, offset=offset)
-        except Exception:
-            break
-        if not batch:
-            break
-        positions.extend(batch)
-        if len(batch) < page_size:
-            break
-        offset += len(batch)
-    return positions
-
-
 def _iso_from_unix(timestamp_value) -> str:
     try:
         return datetime.fromtimestamp(float(timestamp_value)).astimezone().isoformat()
@@ -256,13 +238,6 @@ def _remote_position_map(wallet_positions: list[dict]) -> dict[tuple[str, str, s
     for item in wallet_positions:
         mapped[_position_identity_from_remote(item)] = item
     return mapped
-
-
-def _remote_positions_by_condition(wallet_positions: list[dict]) -> dict[str, list[dict]]:
-    grouped: dict[str, list[dict]] = {}
-    for item in wallet_positions:
-        grouped.setdefault(str(item.get('conditionId') or item.get('market') or ''), []).append(item)
-    return grouped
 
 
 def _activity_matches_position(activity: dict, pos: dict) -> bool:
@@ -409,39 +384,18 @@ def _list_recent_activity(client: PolymarketDataClient, wallet: str, min_timesta
     return activities
 
 
-def _build_invalidation_payload(pos: dict, reason: str, remote_positions_same_condition: list[dict], exit_activity: dict | None, previous_remote_position: dict | None) -> dict:
-    return {
-        'invalidated_at': now_iso(),
-        'reason': reason,
-        'trade_id': pos.get('trade_id'),
-        'market_id': pos.get('market_id'),
-        'parent_slug': pos.get('parent_slug'),
-        'token_id': pos.get('token_id'),
-        'outcome_label': pos.get('outcome_label'),
-        'entry_time': pos.get('entry_time'),
-        'capital_alocado_usd': pos.get('capital_alocado_usd'),
-        'contracts_qty': pos.get('contracts_qty'),
-        'remote_positions_same_condition': remote_positions_same_condition,
-        'exit_activity': exit_activity or {},
-        'previous_remote_position': previous_remote_position or {},
-    }
-
-
-def _invalidate_open_positions(config, state: dict, wallet_positions: list[dict], previous_remote_positions: dict[str, dict], recent_activities: list[dict]) -> list[dict]:
+def _maybe_close_positions(config, state: dict, wallet_positions: list[dict], previous_remote_positions: dict[str, dict], recent_activities: list[dict]) -> None:
     now_dt = datetime.fromisoformat(now_iso())
     bot_state = state['bot_state']
     open_positions = bot_state.get('open_trades', [])
     remote_positions_by_identity = _remote_position_map(wallet_positions)
-    remote_positions_by_condition = _remote_positions_by_condition(wallet_positions)
     activity_index = _build_activity_index(recent_activities)
     still_open = []
-    invalidated = []
     for pos in open_positions:
         entry_dt = datetime.fromisoformat(pos['entry_time'])
         identity = _position_identity_from_trade_dict(pos)
         identity_key = _identity_key(identity)
         remote_position = remote_positions_by_identity.get(identity)
-        remote_positions_same_condition = remote_positions_by_condition.get(str(pos.get('market_id') or ''), [])
         previous_remote_position = previous_remote_positions.get(identity_key)
         # Manter posição aberta por pelo menos 10 minutos (evita flip-flop)
         if now_dt - entry_dt < timedelta(minutes=10):
@@ -453,39 +407,34 @@ def _invalidate_open_positions(config, state: dict, wallet_positions: list[dict]
             continue
 
         exit_activity = _find_exit_activity(activity_index, pos)
-
-        invalidation_reason = None
-        if remote_positions_same_condition:
-            invalidation_reason = 'remote_condition_open_on_other_side'
-        else:
-            exit_type = str((exit_activity or {}).get('type') or '').upper()
-            if exit_type in {'TRADE', 'REDEEM', 'MERGE'}:
-                invalidation_reason = f'remote_position_absent_with_{exit_type.lower()}'
-
-        if invalidation_reason is None:
+        if exit_activity is None and previous_remote_position is None:
             still_open.append(pos)
             continue
 
-        if remove_open_trade(config, COPYTRADING_STRATEGY_ID, str(pos.get('trade_id'))):
-            payload = _build_invalidation_payload(
-                pos,
-                invalidation_reason,
-                remote_positions_same_condition,
-                exit_activity,
-                previous_remote_position,
-            )
-            log_strategy_invalidation(config, COPYTRADING_STRATEGY_ID, payload)
-            invalidated.append(payload)
+        exit_type = str((exit_activity or {}).get('type') or 'MISSING').upper()
+        if exit_type in {'REDEEM', 'MERGE'} and previous_remote_position is None:
+            still_open.append(pos)
             continue
 
-        still_open.append(pos)
-
+        exit_time_iso = _iso_from_unix((exit_activity or {}).get('timestamp')) if exit_activity else now_iso()
+        closed = _close_copied_position(
+            pos,
+            previous_remote_position,
+            exit_activity,
+            exit_time_iso,
+            f'target_wallet_position_closed_{exit_type.lower()}',
+        )
+        record_closed_trade(config, COPYTRADING_STRATEGY_ID, closed)
+        bot_state['current_cash_usd'] += float(closed['gross_settlement_value_usd'])
+        bot_state['capital_alocado_aberto_usd'] -= float(closed['capital_alocado_usd'])
+        bot_state['realized_pnl_total_usd'] += float(closed['net_pnl_abs'])
+        bot_state['closed_trades_count'] += 1
+        state.setdefault('closed_positions', []).append(closed)
+        
     bot_state['open_trades'] = still_open
     bot_state['open_trades_count'] = len(still_open)
     bot_state['current_bankroll_usd'] = bot_state['current_cash_usd'] + bot_state['capital_alocado_aberto_usd']
     state['bankroll_usd'] = bot_state['current_bankroll_usd']
-    state['last_invalidations'] = invalidated[-50:]
-    return invalidated
 
 
 def run_copytrading_competitor(wallet: str = DEFAULT_WALLET) -> dict:
@@ -493,7 +442,7 @@ def run_copytrading_competitor(wallet: str = DEFAULT_WALLET) -> dict:
     monitor = CopytradingMonitor(config)
     data_client = PolymarketDataClient(config)
     snapshot = monitor.poll_wallet(wallet)
-    wallet_positions = _list_all_remote_positions(data_client, wallet)
+    wallet_positions = data_client.list_positions(user=wallet, limit=500, offset=0)
     state = _load_state(config)
     bot_state = state['bot_state']
     previous_remote_positions = state.get('last_remote_positions') or {}
@@ -501,11 +450,7 @@ def run_copytrading_competitor(wallet: str = DEFAULT_WALLET) -> dict:
     min_entry_timestamp = min(open_entry_timestamps) if open_entry_timestamps else 0.0
     recent_activities = _list_recent_activity(data_client, wallet, min_entry_timestamp)
 
-    invalidations = _invalidate_open_positions(config, state, wallet_positions, previous_remote_positions, recent_activities)
-
-    state = _load_state(config)
-    bot_state = state['bot_state']
-    state['last_invalidations'] = invalidations[-50:]
+    _maybe_close_positions(config, state, wallet_positions, previous_remote_positions, recent_activities)
 
     seen_open_ids = {pos['trade_id'] for pos in bot_state.get('open_trades', [])}
     new_trades = snapshot.get('new_trades', [])
@@ -549,8 +494,6 @@ def run_copytrading_competitor(wallet: str = DEFAULT_WALLET) -> dict:
         'sample_new_trades': new_trades[:20],
         'sample_open_positions': list_open_positions(config, COPYTRADING_STRATEGY_ID)[:10],
         'sample_closed_positions': list_closed_trades(config, COPYTRADING_STRATEGY_ID, limit=10),
-        'invalidations_count': len(invalidations),
-        'sample_invalidations': invalidations[:10],
     }
     report_path = config.storage.reports_dir / 'copytrading_latest.json'
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')

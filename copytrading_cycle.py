@@ -96,8 +96,6 @@ def main() -> int:
             'open_positions_count': snapshot.get('open_trades_count', 0),
             'closed_positions_count': snapshot.get('closed_trades_count', 0),
             'trades_copied_total': state.get('trades_copied_total', 0),
-            'invalidations_count': report.get('invalidations_count', 0) if report else 0,
-            'sample_invalidations': report.get('sample_invalidations', [])[:10] if report else [],
             'sample_open_positions': snapshot.get('open_trades', [])[:10],
             'sample_closed_positions': snapshot.get('closed_trades', [])[:10],
         }

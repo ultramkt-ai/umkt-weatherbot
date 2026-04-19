@@ -197,16 +197,6 @@ def record_closed_trade(config: Config, strategy_id: str, trade: dict[str, Any])
         )
 
 
-def remove_open_trade(config: Config, strategy_id: str, trade_id: str) -> bool:
-    ensure_schema(config)
-    with _connect(config.storage.ledger_db_file) as conn:
-        cursor = conn.execute(
-            "DELETE FROM trades WHERE strategy_id=? AND trade_id=? AND status='OPEN'",
-            (strategy_id, trade_id),
-        )
-        return cursor.rowcount > 0
-
-
 def list_open_trades(config: Config, strategy_id: str, limit: int | None = None) -> list[dict[str, Any]]:
     ensure_schema(config)
     sql = "SELECT * FROM trades WHERE strategy_id=? AND status='OPEN'"
@@ -350,20 +340,13 @@ def migrate_legacy_trade_data(config: Config) -> None:
             for trade in data.get("open_trades", []) or []:
                 record_open_trade(config, strategy_id, trade)
 
-    with _connect(config.storage.ledger_db_file) as conn:
-        existing_copytrading_rows = conn.execute(
-            "SELECT COUNT(*) FROM trades WHERE strategy_id=?",
-            (COPYTRADING_STRATEGY_ID,),
-        ).fetchone()[0]
-
-    if existing_copytrading_rows == 0:
-        copy_state = read_json_file(config.storage.state_dir / "copytrading_competitor_state.json", default={})
-        bot_state = copy_state.get("bot_state", {})
-        for trade in bot_state.get("open_trades", []) or copy_state.get("open_positions", []) or []:
-            record_open_trade(config, COPYTRADING_STRATEGY_ID, trade)
-        for trade in copy_state.get("closed_positions", []) or []:
-            if trade.get("trade_id"):
-                record_closed_trade(config, COPYTRADING_STRATEGY_ID, trade)
+    copy_state = read_json_file(config.storage.state_dir / "copytrading_competitor_state.json", default={})
+    bot_state = copy_state.get("bot_state", {})
+    for trade in bot_state.get("open_trades", []) or copy_state.get("open_positions", []) or []:
+        record_open_trade(config, COPYTRADING_STRATEGY_ID, trade)
+    for trade in copy_state.get("closed_positions", []) or []:
+        if trade.get("trade_id"):
+            record_closed_trade(config, COPYTRADING_STRATEGY_ID, trade)
     normalize_copytrading_fills(config)
     _LEGACY_MIGRATION_DONE = True
 

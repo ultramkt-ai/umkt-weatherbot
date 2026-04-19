@@ -1,32 +1,5 @@
 # Weather Bot
 
-## Status do estágio atual, 2026-04-19
-
-### Copytrading, estágio atual
-Em 2026-04-19, o módulo de copytrading foi endurecido para operar a partir de um estado limpo e coerente com a carteira alvo atual.
-
-Estado operacional atual:
-- o copytrading mantém somente posições abertas com match exato na carteira alvo
-- posições inválidas ou residuais não viram `closed_trade`
-- remoções por inconsistência entram como invalidação técnica, não como saída financeira real
-- `realized_pnl` do copytrading permanece zerado até existir mecanismo de fechamento econômico realmente auditável
-
-Dinâmica atual de manutenção de posições:
-- posição aberta continua apenas se houver match exato por `market_id`, `token_id` e `outcome_label`
-- se a posição local deixar de bater com a carteira alvo e houver evidência estrutural suficiente, ela é removida da simulação
-- a lógica atual privilegia limpeza de estado e integridade do ledger, não realização artificial de PnL
-
-Garantias do estágio atual:
-- paginação completa de posições remotas
-- paginação defensiva de activity
-- bloqueio da reimportação indevida de estado legado do copytrading quando o ledger já contém dados
-- trilha separada de invalidações técnicas em log próprio
-
-Leitura correta deste estágio:
-- o sistema está apto para manter abertas apenas posições válidas da carteira espelhada
-- o sistema ainda não contabiliza fechamento financeiro real como trade encerrado auditado
-- antes de implementar fechamento econômico real, a prioridade foi limpar a simulação e eliminar mascaramento de dados
-
 ## Objetivo
 Bot de paper trade para mercados de temperatura da Polymarket.
 
