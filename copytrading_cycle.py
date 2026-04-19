@@ -56,7 +56,11 @@ def main() -> int:
         
         # Executar copytrading
         report = run_copytrading_competitor(DEFAULT_WALLET)
-        
+
+        # Recarregar estado após a execução para não sobrescrever alterações
+        # persistidas durante o ciclo principal do copytrading.
+        state = _load_state(config)
+
         # Atualizar estado após ciclo
         cycle_end = datetime.now()
         state['bot_state']['last_cycle_finished_at'] = cycle_end.isoformat()
@@ -79,7 +83,8 @@ def main() -> int:
         from storage.ledger_db import COPYTRADING_STRATEGY_ID, build_strategy_snapshot
         import json
         
-        snapshot = build_strategy_snapshot(config, COPYTRADING_STRATEGY_ID, config.risk.initial_bankroll_usd)
+        initial_bankroll_usd = float(state.get('initial_bankroll_usd') or config.risk.initial_bankroll_usd)
+        snapshot = build_strategy_snapshot(config, COPYTRADING_STRATEGY_ID, initial_bankroll_usd)
         
         dashboard_report = {
             'generated_at': cycle_end.isoformat(),

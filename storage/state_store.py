@@ -1,17 +1,10 @@
-import json
-
 from config import Config
 from models.serialization import dataclass_to_dict
 from models.state import BotState
-from models.trade import OpenTrade
-from storage.ledger_db import MAIN_STRATEGY_ID, build_strategy_snapshot, list_open_trade_models, migrate_legacy_trade_data
+from storage.ledger_db import migrate_legacy_trade_data
 from storage.json_store import atomic_write_json, read_json_file
 from utils.ids import generate_session_id
 from utils.time_utils import now_iso
-
-
-def _restore_open_trades(raw_open_trades: list[dict]) -> list[OpenTrade]:
-    return [OpenTrade(**item) for item in raw_open_trades]
 
 
 def load_or_create_state(config: Config) -> BotState:
@@ -20,27 +13,29 @@ def load_or_create_state(config: Config) -> BotState:
 
     if config.storage.state_file.exists():
         data = read_json_file(config.storage.state_file)
-        snapshot = build_strategy_snapshot(config, MAIN_STRATEGY_ID, data.get("initial_bankroll_usd", config.risk.initial_bankroll_usd))
-        data["open_trades"] = list_open_trade_models(config, MAIN_STRATEGY_ID)
-        data["open_trade_ids"] = [trade.trade_id for trade in data["open_trades"]]
-        data["open_trades_count"] = snapshot["open_trades_count"]
-        data["closed_trades_count"] = snapshot["closed_trades_count"]
-        data["approved_trades_count"] = snapshot["approved_trades_count"]
-        data["approved_today"] = snapshot["approved_today"]
-        data["capital_alocado_aberto_usd"] = snapshot["capital_alocado_aberto_usd"]
-        data["gross_exposure_open_usd"] = snapshot["gross_exposure_open_usd"]
-        data["realized_pnl_total_usd"] = snapshot["realized_pnl_total_usd"]
-        data["daily_pnl_usd"] = snapshot["daily_pnl_usd"]
-        data["weekly_pnl_usd"] = snapshot["weekly_pnl_usd"]
-        data["current_cash_usd"] = snapshot["current_cash_usd"]
-        data["current_bankroll_usd"] = snapshot["current_bankroll_usd"]
-        data["open_exposure_pct"] = snapshot["open_exposure_pct"]
-        data["cluster_exposure_map_usd"] = snapshot["cluster_exposure_map_usd"]
-        data["cluster_trade_count_map"] = snapshot["cluster_trade_count_map"]
+        data["current_cash_usd"] = 0.0
+        data["current_bankroll_usd"] = 0.0
+        data["realized_pnl_total_usd"] = 0.0
+        data["fees_paid_total_usd"] = 0.0
+        data["equity_peak_usd"] = 0.0
+        data["current_drawdown_pct"] = 0.0
+        data["max_drawdown_pct"] = 0.0
+        data["capital_alocado_aberto_usd"] = 0.0
+        data["gross_exposure_open_usd"] = 0.0
+        data["open_exposure_pct"] = 0.0
+        data["open_trades_count"] = 0
+        data["closed_trades_count"] = 0
+        data["approved_trades_count"] = 0
+        data["daily_pnl_usd"] = 0.0
+        data["weekly_pnl_usd"] = 0.0
+        data["open_trades"] = []
+        data["open_trade_ids"] = []
+        data["cluster_exposure_map_usd"] = {}
+        data["cluster_trade_count_map"] = {}
         return BotState(**data)
 
     now = now_iso()
-    initial = config.risk.initial_bankroll_usd
+    initial = 0.0
     return BotState(
         session_id=generate_session_id(),
         started_at=now,

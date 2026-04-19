@@ -52,13 +52,6 @@ def build_cycle_status_message(state: BotState) -> str:
     lines = [
         "🦞 Polymarket Weather Bot MVP",
         f"📍 Modo: {mode_label}",
-        f"💵 Banca atual: {_format_usd(state.current_bankroll_usd)}",
-        f"💰 Caixa livre: {_format_usd(state.current_cash_usd)}",
-        f"📈 PnL realizado: {_format_usd(state.realized_pnl_total_usd)}",
-        f"🧱 Capital aberto: {_format_usd(state.capital_alocado_aberto_usd)}",
-        f"📊 Exposição aberta: {_format_pct(state.open_exposure_pct)}",
-        f"🎯 Trades abertos: {state.open_trades_count}",
-        f"✅ Trades fechados: {state.closed_trades_count}",
         f"🌦️ Mercados analisados hoje: {state.markets_scanned_today}",
         f"🟢 Aprovados hoje: {state.approved_today}",
         f"🔴 Rejeitados hoje: {state.rejected_today}",

@@ -2,16 +2,17 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from config import Config
 from models.trade import OpenTrade
 from utils.math_utils import calculate_open_exposure_pct
 from utils.time_utils import now_dt
 
-MAIN_STRATEGY_ID = "WEATHER_BOT_MAIN"
+RUNTIME_STATE_ID = "WEATHER_BOT_MAIN"
 COPYTRADING_STRATEGY_ID = "COPYTRADING_COLDMATH"
 _LEGACY_MIGRATION_DONE = False
 
@@ -86,6 +87,29 @@ def _json(value: Any) -> str | None:
     if value is None:
         return None
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def _runtime_tz(config: Config) -> ZoneInfo:
+    try:
+        return ZoneInfo(config.runtime.timezone)
+    except Exception:
+        return ZoneInfo("America/Sao_Paulo")
+
+
+def _parse_trade_dt(value: Any, tz: ZoneInfo) -> datetime | None:
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=tz)
+    return dt.astimezone(tz)
+
+
+def _week_start_date(now: datetime) -> datetime.date:
+    return now.date() - timedelta(days=now.date().isoweekday() - 1)
 
 
 def record_open_trade(config: Config, strategy_id: str, trade: dict[str, Any]) -> None:
@@ -249,24 +273,21 @@ def build_strategy_snapshot(config: Config, strategy_id: str, initial_bankroll_u
     closed_trades = list_closed_trades(config, strategy_id)
     capital_open = sum(float(item.get("capital_alocado_usd") or 0.0) for item in open_trades)
     realized_pnl = sum(float(item.get("net_pnl_abs") or 0.0) for item in closed_trades)
-    now = now_dt()
-    week_start = now.date().isoweekday() - 1
+    tz = _runtime_tz(config)
+    now = now_dt().astimezone(tz)
+    today = now.date()
+    week_start = _week_start_date(now)
     daily_pnl = 0.0
     weekly_pnl = 0.0
     for item in closed_trades:
         exit_time = item.get("exit_time") or item.get("resolution_time")
-        if not exit_time:
+        exit_dt = _parse_trade_dt(exit_time, tz)
+        if not exit_dt:
             continue
-        try:
-            exit_dt = datetime.fromisoformat(str(exit_time))
-        except ValueError:
-            continue
-        if exit_dt.tzinfo is None:
-            exit_dt = exit_dt.replace(tzinfo=now.tzinfo)
         pnl = float(item.get("net_pnl_abs") or 0.0)
-        if exit_dt.date() == now.date():
+        if exit_dt.date() == today:
             daily_pnl += pnl
-        if (now.date() - exit_dt.date()).days <= week_start:
+        if week_start <= exit_dt.date() <= today:
             weekly_pnl += pnl
     cash = max(0.0, initial_bankroll_usd - sum(float(item.get("net_cost_usd") or 0.0) for item in open_trades) + realized_pnl)
     bankroll = cash + capital_open
@@ -297,6 +318,8 @@ def build_strategy_snapshot(config: Config, strategy_id: str, initial_bankroll_u
     }
 
 
+
+
 def migrate_legacy_trade_data(config: Config) -> None:
     global _LEGACY_MIGRATION_DONE
     if _LEGACY_MIGRATION_DONE:
@@ -307,7 +330,7 @@ def migrate_legacy_trade_data(config: Config) -> None:
 
     main_state = read_json_file(config.storage.state_file, default={})
     for trade in main_state.get("open_trades", []) or []:
-        record_open_trade(config, MAIN_STRATEGY_ID, trade)
+        record_open_trade(config, RUNTIME_STATE_ID, trade)
 
     strategies_dir = config.storage.state_dir / "strategies"
     if strategies_dir.exists():

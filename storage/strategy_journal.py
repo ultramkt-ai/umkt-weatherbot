@@ -24,3 +24,7 @@ def log_strategy_closed_trade(config: Config, strategy_id: str, payload: dict[st
 
 def log_strategy_cycle(config: Config, strategy_id: str, payload: dict[str, Any]) -> None:
     append_jsonl(strategy_log_path(config, strategy_id, "cycles.jsonl"), payload)
+
+
+def log_strategy_error(config: Config, strategy_id: str, payload: dict[str, Any]) -> None:
+    append_jsonl(strategy_log_path(config, strategy_id, "errors.jsonl"), payload)

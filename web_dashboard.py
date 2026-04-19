@@ -52,13 +52,9 @@ def _get_weather_bot_data() -> dict:
         
         return {
             'status': 'Rodando' if state.get('last_cycle_finished_at') else 'Parado',
-            'bankroll': round(state.get('current_bankroll_usd', 0), 2),
-            'cash': round(state.get('current_cash_usd', 0), 2),
             'open_positions': open_positions,
             'closed_positions': closed_positions,
             'markets_monitored': markets_monitored,
-            'realized_pnl': round(state.get('realized_pnl_total_usd', 0), 2),
-            'drawdown': round(state.get('max_drawdown_pct', 0) * 100, 2),
             'last_cycle': state.get('last_cycle_finished_at', 'N/A'),
             'strategies': strategies,
             'funnel': funnel,

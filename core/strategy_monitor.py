@@ -5,8 +5,8 @@ from datetime import datetime
 from typing import Any
 
 from config import Config
-from core.monitor import calculate_hold_duration_hours
 from core.portfolio import apply_closed_trade_to_state
+from core.risk_events import refresh_strategy_risk_state
 from data.polymarket_clob_client import PolymarketClobClient
 from data.polymarket_client import PolymarketClient
 from models.trade import ClosedTrade, OpenTrade
@@ -23,6 +23,12 @@ EXIT_RULES = {
     'YES_CONVEX': {'tp': 0.50, 'sl': -0.30, 'time_hours': 8},
     'MID_RANGE_BALANCED': {'tp': 0.15, 'sl': -0.10, 'time_hours': 6},
 }
+
+
+def calculate_hold_duration_hours(open_trade: OpenTrade, exit_time_iso: str) -> float:
+    entry_dt = datetime.fromisoformat(open_trade.entry_time)
+    exit_dt = datetime.fromisoformat(exit_time_iso)
+    return (exit_dt - entry_dt).total_seconds() / 3600
 
 
 def _should_close_trade(strategy_id: str, open_trade: OpenTrade, now_iso_value: str, marked_roi: float) -> tuple[bool, str | None]:
@@ -144,6 +150,8 @@ def monitor_strategy_open_trades(config: Config) -> tuple[dict[str, Any], list[d
             log_strategy_closed_trade(config, strategy.strategy_id, payload)
         state.open_trades = remaining_open
         state.open_trades_count = len(remaining_open)
+        state.last_cycle_finished_at = now_value
+        state = refresh_strategy_risk_state(state, config)
         save_strategy_state(config, strategy.strategy_id, state)
         write_strategy_report(
             config,
@@ -151,6 +159,7 @@ def monitor_strategy_open_trades(config: Config) -> tuple[dict[str, Any], list[d
             {
                 "generated_at": now_value,
                 "strategy_id": strategy.strategy_id,
+                "status": "closed_monitor_cycle",
                 "closed_now": closed_payloads,
                 "state_snapshot": {
                     "current_bankroll_usd": state.current_bankroll_usd,
@@ -159,6 +168,13 @@ def monitor_strategy_open_trades(config: Config) -> tuple[dict[str, Any], list[d
                     "open_trades_count": state.open_trades_count,
                     "closed_trades_count": state.closed_trades_count,
                     "max_drawdown_pct": state.max_drawdown_pct,
+                    "daily_stop_active": state.daily_stop_active,
+                    "weekly_stop_active": state.weekly_stop_active,
+                    "kill_switch_active": state.kill_switch_active,
+                    "protection_pause_active": state.protection_pause_active,
+                    "pause_reason": state.pause_reason,
+                    "mode": state.mode,
+                    "can_open_new_trades": state.can_open_new_trades,
                 },
             },
         )

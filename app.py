@@ -2,7 +2,6 @@ from datetime import datetime, timedelta
 import signal
 
 from config import load_config
-from core.monitor import monitor_open_trades
 from core.strategy_monitor import monitor_strategy_open_trades
 from core.pipeline import run_market_scan_cycle
 from core.state_machine import refresh_bot_mode
@@ -30,6 +29,44 @@ def _is_due(next_run_iso: str | None, now_value: datetime) -> bool:
         return True
 
 
+def _normalize_scheduler_state(state, config, now: datetime):
+    today = now.date()
+
+    def _safe_parse(value: str | None):
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(value)
+        except Exception:
+            return None
+
+    last_scan_dt = _safe_parse(state.last_market_scan_at)
+    next_scan_dt = _safe_parse(state.next_market_scan_at)
+    last_open_dt = _safe_parse(state.last_open_trades_check_at)
+    next_open_dt = _safe_parse(state.next_open_trades_check_at)
+
+    if last_scan_dt and last_scan_dt.date() != today:
+        state.last_market_scan_at = None
+    if next_scan_dt and next_scan_dt.date() != today:
+        state.next_market_scan_at = now.isoformat()
+
+    if last_open_dt and last_open_dt > now:
+        state.last_open_trades_check_at = None
+    if next_open_dt and next_open_dt > now:
+        state.next_open_trades_check_at = now.isoformat()
+
+    if state.next_market_scan_at and not _is_due(state.next_market_scan_at, now):
+        parsed = _safe_parse(state.next_market_scan_at)
+        if parsed and parsed.date() != today:
+            state.next_market_scan_at = now.isoformat()
+
+    if state.last_daily_reset_date != today.isoformat():
+        state.last_market_scan_at = None
+        state.next_market_scan_at = now.isoformat()
+
+    return state
+
+
 def main() -> None:
     config = load_config()
     lock = ProcessLock(config.storage.state_dir / "market_scan.lock")
@@ -52,11 +89,11 @@ def main() -> None:
             signal.alarm(timeout_seconds)
 
         state.last_cycle_started_at = now_iso()
+        state = _normalize_scheduler_state(state, config, now_dt())
         state = refresh_bot_mode(state)
-        closed_main_trades = []
         closed_trades = []
         now = now_dt()
-        market_scan_due = state.can_open_new_trades and _is_due(state.next_market_scan_at, now)
+        market_scan_due = _is_due(state.next_market_scan_at, now)
         open_trades_due = state.can_monitor_open_trades and _is_due(state.next_open_trades_check_at, now)
 
         if market_scan_due:
@@ -64,22 +101,7 @@ def main() -> None:
             state.last_market_scan_at = now_iso()
 
         if open_trades_due:
-            state, closed_main_trades = monitor_open_trades(state, config, now_iso())
-
-            # Monitora trades abertas e fecha posições por TP/SL/Time-out
             _, closed_trades = monitor_strategy_open_trades(config)
-            if closed_trades:
-                closed_ids = {trade["trade_id"] for trade in closed_trades}
-                state.open_trades = [t for t in state.open_trades if t.trade_id not in closed_ids]
-                state.open_trades_count = len(state.open_trades)
-                state.closed_trades_count += len(closed_trades)
-                state.current_cash_usd += sum(float(trade.get("gross_settlement_value_usd") or 0.0) for trade in closed_trades)
-                state.realized_pnl_total_usd += sum(float(trade.get("net_pnl_abs") or 0.0) for trade in closed_trades)
-                state.capital_alocado_aberto_usd = sum(t.capital_alocado_usd for t in state.open_trades)
-                state.gross_exposure_open_usd = state.capital_alocado_aberto_usd
-                state.current_bankroll_usd = state.current_cash_usd + state.capital_alocado_aberto_usd
-                state.open_exposure_pct = (state.gross_exposure_open_usd / state.current_bankroll_usd) if state.current_bankroll_usd else 0.0
-
             state.last_open_trades_check_at = now_iso()
 
         now = now_dt()

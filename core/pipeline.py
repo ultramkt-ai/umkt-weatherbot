@@ -11,9 +11,6 @@ from config import Config
 from core.decision_engine import evaluate_temperature_outcome_for_entry
 from core.multi_strategy_engine import evaluate_candidate_across_strategies
 from core.normalizer import normalize_temperature_market
-from core.paper_broker import create_open_trade
-from core.portfolio import apply_open_trade_to_state
-from core.risk_manager import evaluate_portfolio_protection
 from core.scanner import scan_weather_us_markets
 from core.state_machine import refresh_bot_mode
 from data.alerts_client import AlertsClient
@@ -359,23 +356,13 @@ def run_market_scan_cycle(state: BotState, config: Config) -> BotState:
         "executable_experiment": [],
         "opened_trades": [],
     }
-    protection_ok, protection_reason = evaluate_portfolio_protection(state, config)
-    if not protection_ok:
-        state.can_open_new_trades = False
-        state.pause_reason = protection_reason
-        state.daily_stop_active = protection_reason == "daily_stop_limit"
-        state.weekly_stop_active = protection_reason == "weekly_stop_limit"
-        state.kill_switch_active = protection_reason == "kill_switch_limit"
-        state = refresh_bot_mode(state)
-        return state
-    else:
-        state.can_open_new_trades = True
-        state.daily_stop_active = False
-        state.weekly_stop_active = False
-        state.kill_switch_active = False
-        if state.pause_reason in {"daily_stop_limit", "weekly_stop_limit", "kill_switch_limit"}:
-            state.pause_reason = None
-        state = refresh_bot_mode(state)
+    state.can_open_new_trades = True
+    state.daily_stop_active = False
+    state.weekly_stop_active = False
+    state.kill_switch_active = False
+    if state.pause_reason in {"daily_stop_limit", "weekly_stop_limit", "kill_switch_limit"}:
+        state.pause_reason = None
+    state = refresh_bot_mode(state)
 
     client = PolymarketClient(config)
     clob_client = PolymarketClobClient(config)
@@ -739,28 +726,6 @@ def run_market_scan_cycle(state: BotState, config: Config) -> BotState:
                     state.rejected_markets_count += 1
                     state.rejected_today += 1
                     log_rejection(config, decision_log)
-                    continue
-
-                if candidate_class not in {"OPERABLE", "WATCHLIST", "EXECUTABLE_EXPERIMENT"}:
-                    continue
-
-                open_trade = create_open_trade(
-                    market=market,
-                    outcome=outcome,
-                    weather=weather,
-                    cluster_id=decision.cluster_id or "unknown",
-                    score=decision.score or 0,
-                    approval_summary=decision.approval_summary or "Approved by pipeline",
-                    config=config,
-                    bankroll_usd=state.current_bankroll_usd,
-                    side=decision.trade_side or "NO",
-                    entry_price=decision.entry_price,
-                )
-                state = apply_open_trade_to_state(state, open_trade)
-                open_trade_payload = asdict(open_trade)
-                cycle_stats["opened_trades"].append(open_trade_payload)
-                log_open_trade(config, open_trade_payload)
-                break
 
     state.current_bankroll_usd = state.current_cash_usd + state.capital_alocado_aberto_usd
     _debug_timing(config, cycle_stats, "cycle_total", cycle_started_perf)

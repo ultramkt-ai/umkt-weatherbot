@@ -3,7 +3,6 @@ from pathlib import Path
 from typing import Any
 
 from config import Config
-from storage.ledger_db import MAIN_STRATEGY_ID, record_closed_trade, record_open_trade
 from storage.jsonl_store import append_jsonl
 
 
@@ -30,13 +29,11 @@ def log_rejection(config: Config, payload: Any) -> None:
 def log_open_trade(config: Config, payload: Any) -> None:
     normalized = _to_payload(payload)
     append_jsonl(config.storage.trades_dir / "open_trades.jsonl", normalized)
-    record_open_trade(config, MAIN_STRATEGY_ID, normalized)
 
 
 def log_closed_trade(config: Config, payload: Any) -> None:
     normalized = _to_payload(payload)
     append_jsonl(config.storage.trades_dir / "closed_trades.jsonl", normalized)
-    record_closed_trade(config, MAIN_STRATEGY_ID, normalized)
 
 
 def log_risk_event(config: Config, payload: Any) -> None:
