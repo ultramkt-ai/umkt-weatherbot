@@ -44,17 +44,17 @@ def build_default_strategies() -> list[StrategySpec]:
         StrategySpec(
             strategy_id="MID_RANGE_BALANCED",
             side_mode="BOTH",
-            min_price=0.45,
-            max_price=0.80,
+            min_price=0.30,
+            max_price=0.90,
             preferred_low=0.55,
             preferred_high=0.70,
-            max_entries_per_market=3,
+            max_entries_per_market=10,
             score_bias=2,
-            notes="Inspirada em wallets mid-range. Faixa ajustada em 2026-04-14 para casar com o que o mercado oferece (0.45-0.80). Diferenciação: resolução entre 24-72h, qualquer cidade que não seja das outras duas listas.",
-            min_hours_to_resolution=24.0,
+            notes="Ajustada em 2026-04-19: faixa ampliada para 0.30-0.90, até 10 entradas por mercado, janela mínima reduzida para 4h e cidades liberadas globalmente. Mantidos preferred band e score bias porque ainda afetam seleção e score no motor atual.",
+            min_hours_to_resolution=4.0,
             max_hours_to_resolution=72.0,
             required_min_distance_threshold=0.0,
-            exclusive_cities=("Sao Paulo", "Buenos Aires", "Mexico City", "Bogota", "Lima", "Santiago", "Guadalajara", "Cairo", "Johannesburg", "Dubai", "Mumbai", "Bangkok"),
+            exclusive_cities=(),
         ),
     ]
 

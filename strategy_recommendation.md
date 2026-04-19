@@ -21,9 +21,13 @@ Rodar 3 estratégias de paper trading em paralelo e comparar desempenho antes de
 
 ### 3. MID_RANGE_BALANCED
 - Lado preferencial: BOTH
-- Faixa operacional: 0.25-0.90
-- Faixa preferida: 0.50-0.75
-- Entradas máximas por mercado: 3
+- Faixa operacional: 0.30-0.90
+- Faixa preferida: 0.55-0.70
+- Entradas máximas por mercado: 10
+- Janela de resolução: 4h-72h
+- Cidades: todas liberadas
+- Take profit: 10%
+- Sem saída por tempo, fica até TP, SL ou resolução
 - Perfil: oportunista, contextual, menos extremo
 
 ## Critério de comparação

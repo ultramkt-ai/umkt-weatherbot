@@ -181,7 +181,7 @@ class StrategySpec:
 |---|---|---|---|---|---|
 | `NO_EXTREME` | NO | 0.90–0.94 | > 48h | Londres, Paris, NYC, Chicago | 2.5°C |
 | `YES_CONVEX` | YES | 0.06–0.50 | 6–24h | Miami, Houston, Phoenix, Dallas | 0°C |
-| `MID_RANGE_BALANCED` | BOTH | 0.45–0.80 | 24–72h | São Paulo, Cairo, Dubai, Mumbai | 0°C |
+| `MID_RANGE_BALANCED` | BOTH | 0.30–0.90 | 4–72h | Todas liberadas | 0°C |
 
 ---
 

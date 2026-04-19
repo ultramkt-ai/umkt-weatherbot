@@ -21,7 +21,7 @@ from utils.time_utils import now_iso
 EXIT_RULES = {
     'NO_EXTREME': {'tp': 0.0125, 'sl': -0.01, 'time_hours': 3},
     'YES_CONVEX': {'tp': 0.50, 'sl': -0.30, 'time_hours': 8},
-    'MID_RANGE_BALANCED': {'tp': 0.15, 'sl': -0.10, 'time_hours': 6},
+    'MID_RANGE_BALANCED': {'tp': 0.10, 'sl': -0.10},
 }
 
 
@@ -40,7 +40,8 @@ def _should_close_trade(strategy_id: str, open_trade: OpenTrade, now_iso_value: 
         return True, 'tp_hit'
     if marked_roi <= rules['sl']:
         return True, 'sl_hit'
-    if hold_hours >= rules['time_hours']:
+    time_hours = rules.get('time_hours')
+    if time_hours is not None and hold_hours >= time_hours:
         return True, 'time_stop'
     return False, None
 
