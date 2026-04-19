@@ -19,8 +19,8 @@ from utils.time_utils import now_iso
 
 
 EXIT_RULES = {
-    'NO_EXTREME': {'tp': 0.0125, 'sl': -0.01, 'time_hours': 3},
-    'YES_CONVEX': {'tp': 0.50, 'sl': -0.30, 'time_hours': 8},
+    'NO_EXTREME': {'tp': 0.02, 'sl': -0.02},
+    'YES_CONVEX': {'tp': 0.10, 'sl': -0.30},
     'MID_RANGE_BALANCED': {'tp': 0.10, 'sl': -0.10},
 }
 
