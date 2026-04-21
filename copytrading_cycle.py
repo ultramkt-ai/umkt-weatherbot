@@ -24,6 +24,8 @@ sys.path.insert(0, str(WB_DIR))
 
 from copytrading_competitor import DEFAULT_WALLET, run_copytrading_competitor, _load_state, _save_state
 from config import load_config
+from storage.journal import log_runtime_event
+from utils.process_lock import ProcessLock
 
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
@@ -41,12 +43,26 @@ logger = logging.getLogger("copytrading_cycle")
 
 def main() -> int:
     """Executa um ciclo de copytrading. Retorna 0 se sucesso, 1 se erro."""
+    config = load_config()
+    cycle_lock = ProcessLock(config.storage.state_dir / 'copytrading_cycle.lock')
+    if not cycle_lock.acquire():
+        logger.warning("Run skipped: another copytrading cycle is still active.")
+        log_runtime_event(config, {
+            'timestamp': datetime.now().isoformat(),
+            'event': 'copytrading_cycle_skipped_due_to_lock',
+            'message': 'Run skipped: another copytrading cycle is still active.',
+        })
+        return 0
     try:
-        config = load_config()
         cycle_start = datetime.now()
         
         logger.info("=== COPYTRADING CYCLE ===")
         logger.info("Iniciando ciclo (wallet=%s)", DEFAULT_WALLET)
+        log_runtime_event(config, {
+            'timestamp': cycle_start.isoformat(),
+            'event': 'copytrading_cycle_started',
+            'wallet': DEFAULT_WALLET,
+        })
         
         # Carregar estado atual
         state = _load_state(config)
@@ -65,6 +81,9 @@ def main() -> int:
         cycle_end = datetime.now()
         state['bot_state']['last_cycle_finished_at'] = cycle_end.isoformat()
         state['bot_state']['updated_at'] = cycle_end.isoformat()
+        state['bot_state']['last_error'] = None
+        state['bot_state']['last_error_at'] = None
+        state['bot_state']['last_cycle_duration_seconds'] = round((cycle_end - cycle_start).total_seconds(), 3)
         state['last_run_at'] = cycle_end.isoformat()
         
         # Atualizar métricas do report
@@ -117,11 +136,27 @@ def main() -> int:
             state.get('trades_copied', 0),
             state.get('open_positions_count', 0)
         )
+        log_runtime_event(config, {
+            'timestamp': cycle_end.isoformat(),
+            'event': 'copytrading_cycle_completed',
+            'wallet': DEFAULT_WALLET,
+            'duration_seconds': round(duration, 3),
+            'bankroll_usd': state.get('bankroll_usd', 0),
+            'trades_copied_total': state.get('trades_copied_total', 0),
+            'open_positions_count': state.get('open_positions_count', 0),
+        })
         
         return 0
         
     except Exception as e:
         logger.exception("Erro no ciclo de copytrading: %s", e)
+        log_runtime_event(config, {
+            'timestamp': datetime.now().isoformat(),
+            'event': 'copytrading_cycle_runtime_exception',
+            'wallet': DEFAULT_WALLET,
+            'error_type': e.__class__.__name__,
+            'message': str(e),
+        })
         
         # Tentar salvar erro no estado
         try:
@@ -132,8 +167,10 @@ def main() -> int:
             _save_state(config, state)
         except Exception:
             pass
-        
+
         return 1
+    finally:
+        cycle_lock.release()
 
 
 if __name__ == "__main__":

@@ -17,6 +17,8 @@ class TemperatureOutcomeCandidate:
     yes_price: float
     token_id: Optional[str]
     outcome_index: int
+    yes_token_id: Optional[str] = None
+    no_token_id: Optional[str] = None
 
 
 @dataclass

@@ -16,7 +16,7 @@ from core.state_machine import refresh_bot_mode
 from data.alerts_client import AlertsClient
 from data.geocoding_client import GeocodingClient
 from data.polymarket_client import PolymarketClient
-from data.polymarket_clob_client import PolymarketClobClient
+from data.polymarket_clob_client import ClobRequestError, PolymarketClobClient
 from data.weather_catalog import WeatherMarketCatalog
 from data.weather_client import WeatherClient
 from models.state import BotState
@@ -336,14 +336,11 @@ def run_market_scan_cycle(state: BotState, config: Config) -> BotState:
     cycle_started_perf = perf_counter()
     now = now_dt()
     today = now.date().isoformat()
-    
-    # Reset diário explícito à meia-noite
+
     if state.last_daily_reset_date != today:
-        state.daily_pnl_usd = 0.0
-        state.daily_stop_active = False
         state.last_daily_reset_date = today
-        log_runtime_event(config, {"event": "daily_reset", "date": today, "reason": "midnight_reset"})
-    
+        log_runtime_event(config, {"event": "daily_reset", "date": today, "reason": "midnight_scheduler_reset"})
+
     cycle_stats: dict[str, Any] = {
         "cycle_started_at": now_iso(),
         "cycle_finished_at": None,
@@ -356,12 +353,6 @@ def run_market_scan_cycle(state: BotState, config: Config) -> BotState:
         "executable_experiment": [],
         "opened_trades": [],
     }
-    state.can_open_new_trades = True
-    state.daily_stop_active = False
-    state.weekly_stop_active = False
-    state.kill_switch_active = False
-    if state.pause_reason in {"daily_stop_limit", "weekly_stop_limit", "kill_switch_limit"}:
-        state.pause_reason = None
     state = refresh_bot_mode(state)
 
     client = PolymarketClient(config)
@@ -503,7 +494,22 @@ def run_market_scan_cycle(state: BotState, config: Config) -> BotState:
                 outcome.token_id for outcome in market.outcomes
                 if outcome.token_id and not any(open_trade.token_id == outcome.token_id for open_trade in state.open_trades)
             ]
-            market_book_map = clob_client.get_book_map(market_token_ids)
+            try:
+                market_book_map = clob_client.get_book_map(market_token_ids)
+            except ClobRequestError as exc:
+                log_runtime_event(config, {
+                    "timestamp": now_iso(),
+                    "event": "clob_book_fetch_failed",
+                    "market_id": market.market_id,
+                    "title": market.title,
+                    "token_ids_count": len(market_token_ids),
+                    "endpoint": exc.endpoint,
+                    "reason": exc.reason,
+                    "attempts": exc.attempts,
+                    "retryable": exc.retryable,
+                    "original_error": exc.original_error,
+                })
+                raise
 
             for outcome in market.outcomes:
                 if outcome.token_id and any(open_trade.token_id == outcome.token_id for open_trade in state.open_trades):

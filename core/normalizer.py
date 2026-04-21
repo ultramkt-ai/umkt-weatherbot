@@ -91,6 +91,8 @@ def normalize_temperature_market(raw_market: dict[str, Any], config: Config) -> 
             no_price=no_price,
             yes_price=yes_price,
             token_id=no_token_id,
+            yes_token_id=yes_token_id,
+            no_token_id=no_token_id,
             outcome_index=1,
         )
     ]

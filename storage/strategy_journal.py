@@ -22,6 +22,10 @@ def log_strategy_closed_trade(config: Config, strategy_id: str, payload: dict[st
     record_closed_trade(config, strategy_id, payload)
 
 
+def log_strategy_blocked_close_attempt(config: Config, strategy_id: str, payload: dict[str, Any]) -> None:
+    append_jsonl(strategy_log_path(config, strategy_id, "blocked_close_attempts.jsonl"), payload)
+
+
 def log_strategy_cycle(config: Config, strategy_id: str, payload: dict[str, Any]) -> None:
     append_jsonl(strategy_log_path(config, strategy_id, "cycles.jsonl"), payload)
 

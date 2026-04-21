@@ -5,9 +5,21 @@ from models.state import BotState
 from models.weather import WeatherContext
 
 
-def _price_score(no_price: float) -> int:
-    if 0.94 <= no_price <= 0.98:
+def _price_score(selected_price: float, side: str | None = None) -> int:
+    if side == "YES":
+        if 0.04 <= selected_price <= 0.12:
+            return 15
+        if 0.12 < selected_price <= 0.20:
+            return 11
+        if 0.20 < selected_price <= 0.35:
+            return 6
+        return 0
+    if 0.94 <= selected_price <= 0.98:
         return 15
+    if 0.84 <= selected_price < 0.94:
+        return 11
+    if 0.55 <= selected_price < 0.84:
+        return 6
     return 0
 
 
@@ -102,8 +114,12 @@ def score_temperature_outcome(
     state: BotState,
     config: Config,
     cluster_id: str,
+    side: str | None = None,
+    entry_price: float | None = None,
 ) -> ScoreResult:
-    price_score = _price_score(outcome.no_price)
+    selected_side = side or "NO"
+    selected_price = entry_price if entry_price is not None else (outcome.yes_price if selected_side == "YES" else outcome.no_price)
+    price_score = _price_score(selected_price, selected_side)
     threshold_score = _bucket_score(outcome, weather)
     liquidity_score = _liquidity_score(market.liquidity)
     spread_score = _spread_score(market.spread)

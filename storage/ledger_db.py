@@ -15,12 +15,16 @@ from utils.time_utils import now_dt
 RUNTIME_STATE_ID = "WEATHER_BOT_MAIN"
 COPYTRADING_STRATEGY_ID = "COPYTRADING_COLDMATH"
 _LEGACY_MIGRATION_DONE = False
+NO_MARK_FIX_CUTOFF_ISO = "2026-04-20T16:33:00-03:00"
+YES_TOKEN_FIX_CUTOFF_ISO = "2026-04-20T16:53:00-03:00"
+EXECUTION_PRICE_FIX_CUTOFF_ISO = "2026-04-20T16:59:00-03:00"
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=30.0)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=30000")
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     return conn
@@ -73,14 +77,256 @@ def ensure_schema(config: Config) -> None:
                 resolution_source_value TEXT,
                 drawdown_after_close REAL,
                 exit_reason TEXT,
+                audit_status TEXT NOT NULL DEFAULT 'trusted',
+                audit_bucket TEXT NOT NULL DEFAULT 'legacy_unclassified',
+                audit_notes TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (strategy_id, trade_id)
             );
             CREATE INDEX IF NOT EXISTS idx_trades_strategy_status ON trades(strategy_id, status);
             CREATE INDEX IF NOT EXISTS idx_trades_strategy_entry_time ON trades(strategy_id, entry_time);
+
+            CREATE TABLE IF NOT EXISTS trade_events (
+                strategy_id TEXT NOT NULL,
+                trade_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                event_time TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (strategy_id, trade_id, event_type, event_time)
+            );
+            CREATE INDEX IF NOT EXISTS idx_trade_events_strategy_time ON trade_events(strategy_id, event_time);
             """
         )
+        for ddl in [
+            "ALTER TABLE trades ADD COLUMN audit_status TEXT NOT NULL DEFAULT 'trusted'",
+            "ALTER TABLE trades ADD COLUMN audit_bucket TEXT NOT NULL DEFAULT 'legacy_unclassified'",
+            "ALTER TABLE trades ADD COLUMN audit_notes TEXT",
+        ]:
+            try:
+                conn.execute(ddl)
+            except sqlite3.OperationalError:
+                pass
+        conn.execute(
+            """
+            UPDATE trades
+            SET exit_reason = CASE
+                WHEN resolution_source = 'resolved_market_outcome' THEN 'market_resolved'
+                WHEN resolution_source LIKE 'clob_%' THEN 'mark_to_market_close_legacy'
+                WHEN resolution_source = 'entry_price_fallback_mark' THEN 'fallback_mark_close_legacy'
+                ELSE 'close_reason_unrecorded_legacy'
+            END,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE status='CLOSED' AND (exit_reason IS NULL OR TRIM(exit_reason) = '')
+            """
+        )
+        conn.execute(
+            """
+            UPDATE trades
+            SET audit_status = 'legacy_mark_bug_suspect',
+                audit_bucket = 'pre_fix_suspect',
+                audit_notes = COALESCE(audit_notes, 'Fechado antes da correção do mark de posições NO; requer cautela analítica.'),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE status='CLOSED'
+              AND side='NO'
+              AND COALESCE(exit_time, resolution_time, '') <> ''
+              AND COALESCE(exit_time, resolution_time) < ?
+              AND resolution_source IN (
+                    'clob_last_trade_mark',
+                    'clob_midpoint_mark',
+                    'clob_best_bid_mark',
+                    'clob_best_ask_mark',
+                    'entry_price_fallback_mark'
+              )
+            """,
+            (NO_MARK_FIX_CUTOFF_ISO,),
+        )
+        conn.execute(
+            """
+            UPDATE trades
+            SET audit_status = 'trusted_post_fix',
+                audit_bucket = 'post_fix_trusted',
+                audit_notes = COALESCE(audit_notes, 'Fechado após a correção do mark por token; histórico confiável pós-correção.'),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE status='CLOSED'
+              AND COALESCE(exit_time, resolution_time, '') <> ''
+              AND COALESCE(exit_time, resolution_time) >= ?
+              AND (
+                    audit_status IS NULL
+                    OR audit_status = 'trusted'
+                    OR audit_status = 'legacy_unclassified'
+                    OR audit_status = 'trusted_post_fix'
+              )
+            """,
+            (NO_MARK_FIX_CUTOFF_ISO,),
+        )
+        conn.execute(
+            """
+            UPDATE trades
+            SET audit_status = CASE
+                    WHEN status='OPEN' THEN 'open_position'
+                    ELSE COALESCE(audit_status, 'trusted')
+                END,
+                audit_bucket = CASE
+                    WHEN status='OPEN' THEN 'open_position'
+                    WHEN audit_bucket = 'legacy_unclassified' THEN 'pre_fix_other'
+                    ELSE audit_bucket
+                END,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE status='OPEN' OR audit_bucket = 'legacy_unclassified'
+            """
+        )
+        conn.execute(
+            """
+            UPDATE trades
+            SET audit_status = 'trusted_post_fix',
+                audit_bucket = 'post_fix_trusted',
+                audit_notes = COALESCE(audit_notes, 'Trade fechado após correções recentes; bucket de posição aberta removido por inconsistência legada.'),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE status='CLOSED'
+              AND COALESCE(audit_bucket, '') = 'open_position'
+            """
+        )
+        conn.execute(
+            """
+            UPDATE trades
+            SET audit_status = 'yes_token_mapping_bug_suspect',
+                audit_bucket = 'yes_token_mapping_suspect',
+                audit_notes = COALESCE(audit_notes, 'Trade YES com evidência de fechamento usando token do outcome NO; excluído do dashboard.'),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE strategy_id='YES_CONVEX'
+              AND side='YES'
+              AND status='CLOSED'
+              AND COALESCE(exit_time, resolution_time, '') <> ''
+              AND COALESCE(exit_time, resolution_time) < ?
+              AND resolution_source = 'market_outcome_price_by_token'
+              AND LOWER(COALESCE(json_extract(resolution_source_value, '$.matched_outcome_label'), '')) = 'no'
+            """,
+            (YES_TOKEN_FIX_CUTOFF_ISO,),
+        )
+        conn.execute(
+            """
+            UPDATE trades
+            SET audit_status = 'non_executable_exit_price_suspect',
+                audit_bucket = 'non_executable_exit_suspect',
+                audit_notes = COALESCE(audit_notes, 'Fechado com preço indicativo/mark, não com preço executável de saída; excluído do dashboard.'),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE strategy_id='YES_CONVEX'
+              AND status='CLOSED'
+              AND COALESCE(exit_time, resolution_time, '') <> ''
+              AND COALESCE(exit_time, resolution_time) < ?
+              AND resolution_source IN (
+                    'clob_last_trade_mark',
+                    'clob_midpoint_mark',
+                    'market_outcome_price_by_token',
+                    'market_outcome_price_by_side'
+              )
+              AND COALESCE(audit_bucket, '') NOT IN ('yes_token_mapping_suspect')
+            """,
+            (EXECUTION_PRICE_FIX_CUTOFF_ISO,),
+        )
+        _backfill_trade_events(conn)
+        conn.execute(
+            """
+            UPDATE trades
+            SET status='CLOSED',
+                updated_at=CURRENT_TIMESTAMP,
+                audit_notes=COALESCE(audit_notes, 'Status reconciliado para CLOSED após detecção de evento CLOSE já persistido no ledger.')
+            WHERE strategy_id=?
+              AND status='OPEN'
+              AND COALESCE(exit_time, resolution_time, '') <> ''
+              AND EXISTS (
+                    SELECT 1
+                    FROM trade_events te
+                    WHERE te.strategy_id = trades.strategy_id
+                      AND te.trade_id = trades.trade_id
+                      AND te.event_type = 'CLOSE'
+              )
+            """,
+            (COPYTRADING_STRATEGY_ID,),
+        )
+        conn.execute(
+            """
+            UPDATE trades
+            SET audit_status='copytrading_merge_proxy_exit',
+                audit_bucket='copytrading_merge_proxy_exit',
+                audit_notes='Copytrading fechou por MERGE da carteira alvo usando posição remota anterior como proxy de resolução; tratar como evidência fraca para tuning.',
+                updated_at=CURRENT_TIMESTAMP
+            WHERE strategy_id=?
+              AND status='CLOSED'
+              AND exit_reason='target_wallet_position_closed_merge'
+            """,
+            (COPYTRADING_STRATEGY_ID,),
+        )
+        conn.execute(
+            """
+            UPDATE trades
+            SET audit_status='copytrading_missing_exit_suspect',
+                audit_bucket='copytrading_missing_exit_suspect',
+                audit_notes='Copytrading fechou sem SELL/REDEEM/MERGE explícito, reconciliando pelo desaparecimento da posição remota; tratar como suspeito para análise.',
+                updated_at=CURRENT_TIMESTAMP
+            WHERE strategy_id=?
+              AND status='CLOSED'
+              AND exit_reason='target_wallet_position_closed_missing'
+            """,
+            (COPYTRADING_STRATEGY_ID,),
+        )
+        conn.execute(
+            """
+            UPDATE trades
+            SET audit_status='trusted_post_fix',
+                audit_bucket='post_fix_trusted',
+                audit_notes=COALESCE(audit_notes, 'Copytrading fechado com evidência compatível (SELL/REDEEM) após auditoria.'),
+                updated_at=CURRENT_TIMESTAMP
+            WHERE strategy_id=?
+              AND status='CLOSED'
+              AND exit_reason='target_wallet_position_closed_redeem'
+              AND COALESCE(audit_bucket, '') NOT IN ('copytrading_merge_proxy_exit', 'copytrading_missing_exit_suspect')
+            """,
+            (COPYTRADING_STRATEGY_ID,),
+        )
+
+
+def _record_trade_event(conn: sqlite3.Connection, strategy_id: str, trade_id: str, event_type: str, event_time: Any, payload: dict[str, Any]) -> None:
+    if not event_time:
+        raise RuntimeError(f"Missing event_time for {event_type} on {strategy_id}/{trade_id}")
+    conn.execute(
+        """
+        INSERT INTO trade_events (strategy_id, trade_id, event_type, event_time, payload_json)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(strategy_id, trade_id, event_type, event_time) DO UPDATE SET
+            payload_json=excluded.payload_json
+        """,
+        (strategy_id, trade_id, event_type, str(event_time), json.dumps(payload, ensure_ascii=False, sort_keys=True)),
+    )
+
+
+def _backfill_trade_events(conn: sqlite3.Connection) -> None:
+    rows = conn.execute(
+        """
+        SELECT * FROM trades
+        WHERE NOT EXISTS (
+            SELECT 1 FROM trade_events te
+            WHERE te.strategy_id = trades.strategy_id AND te.trade_id = trades.trade_id
+        )
+        """
+    ).fetchall()
+    for row in rows:
+        item = _row_to_trade_dict(row)
+        strategy_id = str(item.get("strategy_id") or "")
+        trade_id = str(item.get("trade_id") or "")
+        if item.get("entry_time"):
+            _record_trade_event(conn, strategy_id, trade_id, "OPEN", item.get("entry_time"), item)
+        if item.get("status") == "CLOSED" and (item.get("exit_time") or item.get("resolution_time")):
+            _record_trade_event(
+                conn,
+                strategy_id,
+                trade_id,
+                "CLOSE",
+                item.get("exit_time") or item.get("resolution_time"),
+                item,
+            )
 
 
 def _json(value: Any) -> str | None:
@@ -115,6 +361,14 @@ def _week_start_date(now: datetime) -> datetime.date:
 def record_open_trade(config: Config, strategy_id: str, trade: dict[str, Any]) -> None:
     ensure_schema(config)
     with _connect(config.storage.ledger_db_file) as conn:
+        existing = conn.execute(
+            "SELECT status FROM trades WHERE strategy_id=? AND trade_id=?",
+            (strategy_id, str(trade.get("trade_id") or "")),
+        ).fetchone()
+        if existing and str(existing[0] or "") == "CLOSED":
+            raise RuntimeError(
+                f"Inconsistência no ledger: tentativa de reabrir trade já fechado ({strategy_id}/{trade.get('trade_id')})"
+            )
         conn.execute(
             """
             INSERT INTO trades (
@@ -165,12 +419,13 @@ def record_open_trade(config: Config, strategy_id: str, trade: dict[str, Any]) -
                 "weather_snapshot_at_entry": _json(trade.get("weather_snapshot_at_entry")),
             },
         )
+        _record_trade_event(conn, strategy_id, str(trade.get("trade_id") or ""), "OPEN", trade.get("entry_time"), trade)
 
 
 def record_closed_trade(config: Config, strategy_id: str, trade: dict[str, Any]) -> None:
     ensure_schema(config)
     with _connect(config.storage.ledger_db_file) as conn:
-        conn.execute(
+        cursor = conn.execute(
             """
             UPDATE trades SET
                 status='CLOSED',
@@ -186,6 +441,18 @@ def record_closed_trade(config: Config, strategy_id: str, trade: dict[str, Any])
                 resolution_source_value=:resolution_source_value,
                 drawdown_after_close=:drawdown_after_close,
                 exit_reason=:exit_reason,
+                audit_status=CASE
+                    WHEN COALESCE(audit_bucket, '') IN ('yes_token_mapping_suspect', 'non_executable_exit_suspect', 'pre_fix_suspect') THEN audit_status
+                    ELSE 'trusted_post_fix'
+                END,
+                audit_bucket=CASE
+                    WHEN COALESCE(audit_bucket, '') IN ('yes_token_mapping_suspect', 'non_executable_exit_suspect', 'pre_fix_suspect') THEN audit_bucket
+                    ELSE 'post_fix_trusted'
+                END,
+                audit_notes=CASE
+                    WHEN COALESCE(audit_bucket, '') IN ('yes_token_mapping_suspect', 'non_executable_exit_suspect', 'pre_fix_suspect') THEN audit_notes
+                    ELSE COALESCE(audit_notes, 'Fechado após correções de execução e auditoria; considerado confiável por padrão.')
+                END,
                 updated_at=CURRENT_TIMESTAMP
             WHERE strategy_id=:strategy_id AND trade_id=:trade_id
             """,
@@ -195,6 +462,11 @@ def record_closed_trade(config: Config, strategy_id: str, trade: dict[str, Any])
                 "resolution_source_value": _json(trade.get("resolution_source_value")),
             },
         )
+        if cursor.rowcount != 1:
+            raise RuntimeError(
+                f"Inconsistência no ledger: tentativa de fechar trade inexistente ou duplicado ({strategy_id}/{trade.get('trade_id')})"
+            )
+        _record_trade_event(conn, strategy_id, str(trade.get("trade_id") or ""), "CLOSE", trade.get("exit_time") or trade.get("resolution_time"), trade)
 
 
 def list_open_trades(config: Config, strategy_id: str, limit: int | None = None) -> list[dict[str, Any]]:
@@ -265,6 +537,38 @@ def list_closed_trades(config: Config, strategy_id: str, limit: int | None = Non
     with _connect(config.storage.ledger_db_file) as conn:
         rows = conn.execute(sql, params).fetchall()
     return [_row_to_trade_dict(row) for row in rows]
+
+
+def list_trade_events(config: Config, strategy_id: str | None = None, trade_id: str | None = None, limit: int | None = None) -> list[dict[str, Any]]:
+    ensure_schema(config)
+    clauses: list[str] = []
+    params: list[Any] = []
+    if strategy_id:
+        clauses.append("strategy_id=?")
+        params.append(strategy_id)
+    if trade_id:
+        clauses.append("trade_id=?")
+        params.append(trade_id)
+    sql = "SELECT * FROM trade_events"
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    sql += " ORDER BY event_time DESC, created_at DESC"
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(limit)
+    with _connect(config.storage.ledger_db_file) as conn:
+        rows = conn.execute(sql, params).fetchall()
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        raw = item.get("payload_json")
+        if raw:
+            try:
+                item["payload"] = json.loads(raw)
+            except Exception:
+                item["payload"] = raw
+        result.append(item)
+    return result
 
 
 def build_strategy_snapshot(config: Config, strategy_id: str, initial_bankroll_usd: float) -> dict[str, Any]:
@@ -343,7 +647,13 @@ def migrate_legacy_trade_data(config: Config) -> None:
     copy_state = read_json_file(config.storage.state_dir / "copytrading_competitor_state.json", default={})
     bot_state = copy_state.get("bot_state", {})
     for trade in bot_state.get("open_trades", []) or copy_state.get("open_positions", []) or []:
-        record_open_trade(config, COPYTRADING_STRATEGY_ID, trade)
+        if trade.get("exit_time") or trade.get("resolution_time") or str(trade.get("status") or "").upper() == "CLOSED":
+            continue
+        try:
+            record_open_trade(config, COPYTRADING_STRATEGY_ID, trade)
+        except RuntimeError as exc:
+            if "tentativa de reabrir trade já fechado" not in str(exc):
+                raise
     for trade in copy_state.get("closed_positions", []) or []:
         if trade.get("trade_id"):
             record_closed_trade(config, COPYTRADING_STRATEGY_ID, trade)

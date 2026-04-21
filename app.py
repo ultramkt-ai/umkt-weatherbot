@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 import signal
 
 from config import load_config
+from data.polymarket_clob_client import ClobRequestError
 from core.strategy_monitor import monitor_strategy_open_trades
 from core.pipeline import run_market_scan_cycle
 from core.state_machine import refresh_bot_mode
@@ -81,6 +82,7 @@ def main() -> None:
         return
 
     state = load_or_create_state(config)
+    cycle_started_at = now_dt()
     previous_handler = signal.getsignal(signal.SIGALRM)
     timeout_seconds = max(0, config.runtime.cycle_timeout_seconds)
     try:
@@ -88,9 +90,14 @@ def main() -> None:
             signal.signal(signal.SIGALRM, _timeout_handler)
             signal.alarm(timeout_seconds)
 
-        state.last_cycle_started_at = now_iso()
+        state.last_cycle_started_at = cycle_started_at.isoformat()
         state = _normalize_scheduler_state(state, config, now_dt())
         state = refresh_bot_mode(state)
+        log_runtime_event(config, {
+            "timestamp": cycle_started_at.isoformat(),
+            "event": "market_scan_cycle_started",
+            "cycle_timeout_seconds": timeout_seconds,
+        })
         closed_trades = []
         now = now_dt()
         market_scan_due = _is_due(state.next_market_scan_at, now)
@@ -112,10 +119,23 @@ def main() -> None:
 
         status_message = build_cycle_status_message(state)
         state.last_cycle_status_message = status_message
-        state.last_cycle_finished_at = now_iso()
+        finished_at = now_dt()
+        state.last_cycle_finished_at = finished_at.isoformat()
+        state.last_cycle_duration_seconds = round((finished_at - cycle_started_at).total_seconds(), 3)
         state.last_error_code = None
         state.last_error_at = None
         save_state(config, state)
+        log_runtime_event(config, {
+            "timestamp": finished_at.isoformat(),
+            "event": "market_scan_cycle_completed",
+            "duration_seconds": state.last_cycle_duration_seconds,
+            "market_scan_due": market_scan_due,
+            "open_trades_due": open_trades_due,
+            "closed_trades_count": len(closed_trades),
+            "markets_scanned_today": state.markets_scanned_today,
+            "approved_today": state.approved_today,
+            "rejected_today": state.rejected_today,
+        })
 
         print(status_message)
     except CycleTimeoutError:
@@ -136,10 +156,38 @@ def main() -> None:
         })
         print(message)
         raise SystemExit(124)
-    except Exception:
-        state.last_error_code = "cycle_runtime_exception"
-        state.last_error_at = now_iso()
+    except ClobRequestError as exc:
+        error_at = now_dt().isoformat()
+        state.last_error_code = f"clob_fetch_failed:{exc.reason}"
+        state.last_error_at = error_at
+        state.last_cycle_finished_at = error_at
+        state.last_cycle_status_message = (
+            f"Run aborted: CLOB fetch failed after {exc.attempts} attempt(s), reason={exc.reason}."
+        )
         save_state(config, state)
+        log_runtime_event(config, {
+            "timestamp": error_at,
+            "event": "market_scan_cycle_aborted_clob_failure",
+            "reason": exc.reason,
+            "attempts": exc.attempts,
+            "retryable": exc.retryable,
+            "endpoint": exc.endpoint,
+            "original_error": exc.original_error,
+            "message": str(exc),
+        })
+        raise
+    except Exception as exc:
+        error_at = now_dt().isoformat()
+        state.last_error_code = "cycle_runtime_exception"
+        state.last_error_at = error_at
+        state.last_cycle_finished_at = error_at
+        save_state(config, state)
+        log_runtime_event(config, {
+            "timestamp": error_at,
+            "event": "market_scan_cycle_runtime_exception",
+            "error_type": exc.__class__.__name__,
+            "message": str(exc),
+        })
         raise
     finally:
         if timeout_seconds:

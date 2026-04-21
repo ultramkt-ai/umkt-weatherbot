@@ -6,6 +6,30 @@ from utils.ids import generate_trade_id
 from utils.time_utils import now_iso
 
 
+def _compact_contract_rules(contract_rules: str | None) -> dict:
+    raw = (contract_rules or "").strip()
+    if not raw:
+        return {"present": False}
+    compact = " ".join(raw.split())
+    return {
+        "present": True,
+        "chars": len(raw),
+        "excerpt": compact[:240],
+    }
+
+
+def _compact_order_book_snapshot(market: TemperatureMarket, side: str, selected_entry_price: float) -> dict:
+    return {
+        "spread": market.spread,
+        "best_bid": market.best_bid,
+        "best_ask": market.best_ask,
+        "bid_levels": market.bid_levels,
+        "ask_levels": market.ask_levels,
+        "selected_side": side,
+        "selected_entry_price": selected_entry_price,
+    }
+
+
 def create_open_trade(
     market: TemperatureMarket,
     outcome: TemperatureOutcomeCandidate,
@@ -17,12 +41,16 @@ def create_open_trade(
     bankroll_usd: float,
     side: str = "NO",
     entry_price: float | None = None,
+    approval_details: dict | None = None,
 ) -> OpenTrade:
     capital_alocado_usd = bankroll_usd * config.risk.risk_per_trade_pct
     fees_paid_usd = 0.0
     gross_cost_usd = capital_alocado_usd
     net_cost_usd = gross_cost_usd + fees_paid_usd
     selected_entry_price = entry_price if entry_price is not None else (outcome.no_price if side == "NO" else outcome.yes_price)
+    selected_token_id = outcome.no_token_id if side == "NO" else outcome.yes_token_id
+    if not selected_token_id:
+        selected_token_id = outcome.token_id
     contracts_qty = capital_alocado_usd / selected_entry_price
     max_loss_usd = net_cost_usd
     max_profit_usd = contracts_qty - net_cost_usd
@@ -35,7 +63,7 @@ def create_open_trade(
         bucket_type=outcome.bucket_type,
         bucket_low=outcome.bucket_low,
         bucket_high=outcome.bucket_high,
-        token_id=outcome.token_id,
+        token_id=selected_token_id,
         entry_time=now_iso(),
         side=side,
         entry_price=selected_entry_price,
@@ -62,10 +90,14 @@ def create_open_trade(
             "yes_price": outcome.yes_price,
             "selected_entry_price": selected_entry_price,
             "selected_side": side,
-            "spread": market.spread,
+            "selected_token_id": selected_token_id,
+            "yes_token_id": outcome.yes_token_id,
+            "no_token_id": outcome.no_token_id,
             "liquidity": market.liquidity,
-            "contract_rules": market.contract_rules,
+            "order_book": _compact_order_book_snapshot(market, side, selected_entry_price),
+            "contract_rules": _compact_contract_rules(market.contract_rules),
             "resolution_source": market.resolution_source,
+            "approval_details": approval_details or {},
         },
         weather_snapshot_at_entry={
             "primary_source_name": weather.primary_source_name,

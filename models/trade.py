@@ -33,6 +33,9 @@ class OpenTrade:
     market_snapshot_at_entry: dict[str, Any]
     weather_snapshot_at_entry: dict[str, Any]
     status: str
+    audit_status: Optional[str] = None
+    audit_bucket: Optional[str] = None
+    audit_notes: Optional[str] = None
 
 
 @dataclass
@@ -67,3 +70,6 @@ class ClosedTrade:
     resolution_source_value: Any
     drawdown_after_close: float
     exit_reason: Optional[str] = None
+    audit_status: Optional[str] = None
+    audit_bucket: Optional[str] = None
+    audit_notes: Optional[str] = None

@@ -32,6 +32,16 @@ def load_or_create_state(config: Config) -> BotState:
         data["open_trade_ids"] = []
         data["cluster_exposure_map_usd"] = {}
         data["cluster_trade_count_map"] = {}
+        data["daily_stop_active"] = False
+        data["weekly_stop_active"] = False
+        data["kill_switch_active"] = False
+        data["protection_pause_active"] = False
+        data["pause_reason"] = None
+        data["pause_started_at"] = None
+        data["pause_until"] = None
+        data["manual_review_required"] = False
+        data["mode"] = "ACTIVE"
+        data["can_open_new_trades"] = True
         return BotState(**data)
 
     now = now_iso()

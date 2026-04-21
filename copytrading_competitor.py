@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from datetime import datetime, timedelta
 import json
+import os
 
 from config import load_config
 from copytrading import CopytradingMonitor
@@ -11,6 +12,7 @@ from models.trade import ClosedTrade, OpenTrade
 from models.state import BotState
 from models.serialization import dataclass_to_dict
 from storage.ledger_db import COPYTRADING_STRATEGY_ID, build_strategy_snapshot, list_closed_trades, list_open_positions, list_open_trades, migrate_legacy_trade_data, record_closed_trade, record_open_trade
+from storage.journal import log_blocked_close_attempt, log_closed_trade, log_copytrading_trade_event, log_open_trade, log_runtime_event
 from utils.ids import generate_session_id
 from utils.math_utils import calculate_drawdown_pct
 from utils.time_utils import now_iso
@@ -116,7 +118,7 @@ def _load_state(config):
 def _save_state(config, state):
     path = _state_path(config)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + '.tmp')
+    tmp_path = path.with_suffix(path.suffix + f'.{os.getpid()}.tmp')
     payload = json.dumps(state, ensure_ascii=False, indent=2)
     tmp_path.write_text(payload, encoding='utf-8')
     tmp_path.replace(path)
@@ -304,6 +306,104 @@ def _resolution_from_previous_remote(previous_remote_position: dict | None) -> f
     return None
 
 
+def _exit_evidence_quality(exit_activity: dict | None, previous_remote_position: dict | None) -> str:
+    activity_type = str((exit_activity or {}).get('type') or '').upper()
+    activity_side = str((exit_activity or {}).get('side') or '').upper()
+    activity_price = float((exit_activity or {}).get('price') or 0.0)
+    if activity_type == 'TRADE' and activity_side == 'SELL' and activity_price > 0:
+        return 'strong_sell_trade'
+    if activity_type == 'REDEEM' and previous_remote_position is not None:
+        return 'medium_redeem_with_remote_snapshot'
+    if activity_type == 'MERGE' and previous_remote_position is not None:
+        return 'weak_merge_proxy'
+    if previous_remote_position is not None:
+        return 'weak_remote_disappearance_proxy'
+    return 'insufficient'
+
+
+def _compact_copytrading_open_event(state: dict, trade: dict, pos: OpenTrade) -> dict:
+    market_snapshot = pos.market_snapshot_at_entry or {}
+    return {
+        'timestamp': now_iso(),
+        'event': 'copy_open',
+        'strategy_id': COPYTRADING_STRATEGY_ID,
+        'wallet': state.get('wallet') or DEFAULT_WALLET,
+        'trade_id': pos.trade_id,
+        'origin_trade_id': _trade_key(trade),
+        'origin_timestamp_unix': trade.get('timestamp'),
+        'origin_side': trade.get('side'),
+        'market_id': pos.market_id,
+        'cluster_id': pos.cluster_id,
+        'slug': pos.parent_slug,
+        'outcome_label': pos.outcome_label,
+        'token_id': pos.token_id,
+        'entry_price': pos.entry_price,
+        'origin_contracts_qty': market_snapshot.get('origin_contracts_qty'),
+        'origin_notional_usd': market_snapshot.get('origin_notional_usd'),
+        'local_notional_usd': market_snapshot.get('local_notional_usd'),
+        'copy_ratio': market_snapshot.get('copy_ratio'),
+        'copy_mode': market_snapshot.get('copy_mode'),
+        'local_cap_brl': market_snapshot.get('local_cap_brl'),
+        'contracts_qty': pos.contracts_qty,
+    }
+
+
+def _compact_copytrading_close_event(state: dict, pos: dict, closed: dict, exit_activity: dict | None, previous_remote_position: dict | None) -> dict:
+    return {
+        'timestamp': now_iso(),
+        'event': 'copy_close',
+        'strategy_id': COPYTRADING_STRATEGY_ID,
+        'wallet': state.get('wallet') or DEFAULT_WALLET,
+        'trade_id': pos.get('trade_id'),
+        'market_id': pos.get('market_id'),
+        'cluster_id': pos.get('cluster_id'),
+        'slug': pos.get('parent_slug'),
+        'outcome_label': pos.get('outcome_label'),
+        'token_id': pos.get('token_id'),
+        'entry_time': pos.get('entry_time'),
+        'exit_time': closed.get('exit_time'),
+        'hold_duration_hours': closed.get('hold_duration_hours'),
+        'entry_price': pos.get('entry_price'),
+        'exit_price': closed.get('resolution_value'),
+        'capital_alocado_usd': pos.get('capital_alocado_usd'),
+        'gross_settlement_value_usd': closed.get('gross_settlement_value_usd'),
+        'net_pnl_abs': closed.get('net_pnl_abs'),
+        'roi_on_allocated_capital': closed.get('roi_on_allocated_capital'),
+        'result': closed.get('result'),
+        'exit_reason': closed.get('exit_reason'),
+        'resolution_source': closed.get('resolution_source'),
+        'exit_activity_type': (exit_activity or {}).get('type'),
+        'exit_activity_side': (exit_activity or {}).get('side'),
+        'exit_activity_price': (exit_activity or {}).get('price'),
+        'exit_evidence_quality': _exit_evidence_quality(exit_activity, previous_remote_position),
+        'previous_remote_cur_price': (previous_remote_position or {}).get('curPrice'),
+        'previous_remote_current_value': (previous_remote_position or {}).get('currentValue'),
+        'previous_remote_size': (previous_remote_position or {}).get('size'),
+        'previous_remote_mergeable': (previous_remote_position or {}).get('mergeable'),
+        'previous_remote_redeemable': (previous_remote_position or {}).get('redeemable'),
+    }
+
+
+def _compact_copytrading_blocked_close_event(state: dict, pos: dict, reason: str, exit_activity: dict | None = None) -> dict:
+    return {
+        'timestamp': now_iso(),
+        'event': 'copy_blocked_close',
+        'strategy_id': COPYTRADING_STRATEGY_ID,
+        'wallet': state.get('wallet') or DEFAULT_WALLET,
+        'trade_id': pos.get('trade_id'),
+        'market_id': pos.get('market_id'),
+        'cluster_id': pos.get('cluster_id'),
+        'slug': pos.get('parent_slug'),
+        'outcome_label': pos.get('outcome_label'),
+        'token_id': pos.get('token_id'),
+        'entry_time': pos.get('entry_time'),
+        'reason': reason,
+        'exit_activity_type': (exit_activity or {}).get('type'),
+        'exit_activity_side': (exit_activity or {}).get('side'),
+        'exit_activity_price': (exit_activity or {}).get('price'),
+    }
+
+
 def _close_copied_position(pos: dict, previous_remote_position: dict | None, exit_activity: dict | None, exit_time_iso: str, exit_reason: str) -> dict:
     contracts_qty = float(pos.get('contracts_qty') or 0.0)
     entry_price = float(pos.get('entry_price') or 0.0)
@@ -408,11 +508,41 @@ def _maybe_close_positions(config, state: dict, wallet_positions: list[dict], pr
 
         exit_activity = _find_exit_activity(activity_index, pos)
         if exit_activity is None and previous_remote_position is None:
+            log_copytrading_trade_event(config, _compact_copytrading_blocked_close_event(
+                state,
+                pos,
+                'remote_position_missing_without_exit_evidence',
+            ))
+            log_blocked_close_attempt(config, {
+                'timestamp': now_iso(),
+                'strategy_id': COPYTRADING_STRATEGY_ID,
+                'trade_id': pos.get('trade_id'),
+                'reason': 'remote_position_missing_without_exit_evidence',
+                'market_id': pos.get('market_id'),
+                'token_id': pos.get('token_id'),
+                'outcome_label': pos.get('outcome_label'),
+            })
             still_open.append(pos)
             continue
 
         exit_type = str((exit_activity or {}).get('type') or 'MISSING').upper()
         if exit_type in {'REDEEM', 'MERGE'} and previous_remote_position is None:
+            log_copytrading_trade_event(config, _compact_copytrading_blocked_close_event(
+                state,
+                pos,
+                f'{exit_type.lower()}_without_previous_remote_position',
+                exit_activity,
+            ))
+            log_blocked_close_attempt(config, {
+                'timestamp': now_iso(),
+                'strategy_id': COPYTRADING_STRATEGY_ID,
+                'trade_id': pos.get('trade_id'),
+                'reason': f'{exit_type.lower()}_without_previous_remote_position',
+                'market_id': pos.get('market_id'),
+                'token_id': pos.get('token_id'),
+                'outcome_label': pos.get('outcome_label'),
+                'exit_activity': exit_activity or {},
+            })
             still_open.append(pos)
             continue
 
@@ -425,6 +555,35 @@ def _maybe_close_positions(config, state: dict, wallet_positions: list[dict], pr
             f'target_wallet_position_closed_{exit_type.lower()}',
         )
         record_closed_trade(config, COPYTRADING_STRATEGY_ID, closed)
+        log_copytrading_trade_event(config, _compact_copytrading_close_event(
+            state,
+            pos,
+            closed,
+            exit_activity,
+            previous_remote_position,
+        ))
+        log_closed_trade(config, {
+            **closed,
+            'strategy_id': COPYTRADING_STRATEGY_ID,
+            'closed_by': 'copytrading_reconciliation',
+            'exit_activity_type': exit_type,
+            'had_previous_remote_position': previous_remote_position is not None,
+        })
+        log_runtime_event(config, {
+            'timestamp': now_iso(),
+            'event': 'copytrading_fill_closed',
+            'strategy_id': COPYTRADING_STRATEGY_ID,
+            'trade_id': pos.get('trade_id'),
+            'market_id': pos.get('market_id'),
+            'token_id': pos.get('token_id'),
+            'exit_reason': closed.get('exit_reason'),
+            'resolution_source': closed.get('resolution_source'),
+            'resolution_value': closed.get('resolution_value'),
+            'net_pnl_abs': closed.get('net_pnl_abs'),
+            'roi_on_allocated_capital': closed.get('roi_on_allocated_capital'),
+            'exit_activity_type': exit_type,
+            'had_previous_remote_position': previous_remote_position is not None,
+        })
         bot_state['current_cash_usd'] += float(closed['gross_settlement_value_usd'])
         bot_state['capital_alocado_aberto_usd'] -= float(closed['capital_alocado_usd'])
         bot_state['realized_pnl_total_usd'] += float(closed['net_pnl_abs'])
@@ -462,6 +621,31 @@ def run_copytrading_competitor(wallet: str = DEFAULT_WALLET) -> dict:
         pos = _open_copy_position(state, trade)
         bot_state.setdefault('open_trades', []).append(asdict(pos))
         record_open_trade(config, COPYTRADING_STRATEGY_ID, asdict(pos))
+        log_copytrading_trade_event(config, _compact_copytrading_open_event(state, trade, pos))
+        log_open_trade(config, {
+            **asdict(pos),
+            'strategy_id': COPYTRADING_STRATEGY_ID,
+            'opened_by': 'copytrading_fill_mirror',
+            'origin_side': trade.get('side'),
+            'origin_notional_usd': pos.market_snapshot_at_entry.get('origin_notional_usd'),
+            'local_notional_usd': pos.market_snapshot_at_entry.get('local_notional_usd'),
+            'copy_ratio': pos.market_snapshot_at_entry.get('copy_ratio'),
+        })
+        log_runtime_event(config, {
+            'timestamp': now_iso(),
+            'event': 'copytrading_fill_opened',
+            'strategy_id': COPYTRADING_STRATEGY_ID,
+            'trade_id': pos.trade_id,
+            'market_id': pos.market_id,
+            'token_id': pos.token_id,
+            'entry_price': pos.entry_price,
+            'capital_alocado_usd': pos.capital_alocado_usd,
+            'contracts_qty': pos.contracts_qty,
+            'origin_side': trade.get('side'),
+            'origin_notional_usd': pos.market_snapshot_at_entry.get('origin_notional_usd'),
+            'local_notional_usd': pos.market_snapshot_at_entry.get('local_notional_usd'),
+            'copy_ratio': pos.market_snapshot_at_entry.get('copy_ratio'),
+        })
         bot_state['open_trades_count'] = len(bot_state['open_trades'])
         bot_state['approved_trades_count'] += 1
         bot_state['approved_today'] += 1

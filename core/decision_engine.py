@@ -1,6 +1,6 @@
 from config import Config
 from core.cluster import build_cluster_id
-from core.risk_manager import check_new_trade_risk
+from core.risk_manager import check_strategy_new_trade_risk
 from core.scorer import score_temperature_outcome
 from core.validator import validate_temperature_market, validate_temperature_outcome
 from models.decision import TradeDecision
@@ -59,7 +59,7 @@ def evaluate_temperature_outcome_for_entry(
         )
 
     cluster_id = build_cluster_id(market)
-    risk_check = check_new_trade_risk(state, market, config)
+    risk_check = check_strategy_new_trade_risk(state, market, config)
     if not risk_check.ok:
         return TradeDecision(
             decision="reject",

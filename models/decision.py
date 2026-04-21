@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 from models.weather import WeatherContext
 
@@ -44,6 +44,7 @@ class TradeDecision:
     score: Optional[int] = None
     cluster_id: Optional[str] = None
     approval_summary: Optional[str] = None
+    approval_details: Optional[dict[str, Any]] = None
     weather_context: Optional[WeatherContext] = None
     trade_side: Optional[str] = None
     entry_price: Optional[float] = None

@@ -36,6 +36,11 @@ def log_closed_trade(config: Config, payload: Any) -> None:
     append_jsonl(config.storage.trades_dir / "closed_trades.jsonl", normalized)
 
 
+def log_blocked_close_attempt(config: Config, payload: Any) -> None:
+    normalized = _to_payload(payload)
+    append_jsonl(config.storage.trades_dir / "blocked_close_attempts.jsonl", normalized)
+
+
 def log_risk_event(config: Config, payload: Any) -> None:
     append_jsonl(config.storage.logs_dir / "risk_events.jsonl", _to_payload(payload))
 
@@ -58,3 +63,7 @@ def log_weather_timing(config: Config, payload: Any) -> None:
 
 def log_runtime_event(config: Config, payload: Any) -> None:
     append_jsonl(config.storage.logs_dir / "runtime_events.jsonl", _to_payload(payload))
+
+
+def log_copytrading_trade_event(config: Config, payload: Any) -> None:
+    append_jsonl(config.storage.logs_dir / "copytrading_trade_events.jsonl", _to_payload(payload))

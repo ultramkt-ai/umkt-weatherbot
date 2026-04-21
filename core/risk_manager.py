@@ -6,7 +6,7 @@ from models.state import BotState
 from utils.math_utils import calculate_open_exposure_pct
 
 
-def evaluate_portfolio_protection(state: BotState, config: Config) -> tuple[bool, str | None]:
+def evaluate_strategy_risk_protection(state: BotState, config: Config) -> tuple[bool, str | None]:
     if state.daily_pnl_usd <= (state.initial_bankroll_usd * config.risk.daily_stop_pct):
         return False, "daily_stop_limit"
     if state.weekly_pnl_usd <= (state.initial_bankroll_usd * config.risk.weekly_stop_pct):
@@ -16,8 +16,8 @@ def evaluate_portfolio_protection(state: BotState, config: Config) -> tuple[bool
     return True, None
 
 
-def check_new_trade_risk(state: BotState, market: TemperatureMarket, config: Config) -> RiskCheckResult:
-    protection_ok, protection_reason = evaluate_portfolio_protection(state, config)
+def check_strategy_new_trade_risk(state: BotState, market: TemperatureMarket, config: Config) -> RiskCheckResult:
+    protection_ok, protection_reason = evaluate_strategy_risk_protection(state, config)
     if not protection_ok:
         return RiskCheckResult(ok=False, reason_code=protection_reason)
 
@@ -66,3 +66,8 @@ def check_new_trade_risk(state: BotState, market: TemperatureMarket, config: Con
         cluster_id=cluster_id,
         projected_total_exposure_pct=projected_exposure_pct,
     )
+
+
+# Backward-compatible aliases while the rest of the codebase migrates away from the old global naming.
+evaluate_portfolio_protection = evaluate_strategy_risk_protection
+check_new_trade_risk = check_strategy_new_trade_risk

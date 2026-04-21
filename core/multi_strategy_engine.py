@@ -9,6 +9,7 @@ from core.portfolio import apply_open_trade_to_state
 from core.risk_events import refresh_strategy_risk_state
 from core.paper_broker import create_open_trade
 from core.strategy_engine import evaluate_outcome_for_strategy
+from data.polymarket_clob_client import PolymarketClobClient
 from models.market import TemperatureMarket, TemperatureOutcomeCandidate
 from models.weather import WeatherContext
 from parallel_strategies import build_default_strategies
@@ -30,10 +31,11 @@ def _evaluate_candidate_for_single_strategy(
     weather: WeatherContext | None,
     config: Config,
     strategy,
+    token_book_map: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
     state = load_or_create_strategy_state(config, strategy.strategy_id)
     try:
-        decision = evaluate_outcome_for_strategy(market, outcome, weather, state, config, strategy)
+        decision = evaluate_outcome_for_strategy(market, outcome, weather, state, config, strategy, token_book_map=token_book_map)
         decision_payload = {
             "captured_at": now_iso(),
             "strategy_id": strategy.strategy_id,
@@ -58,6 +60,7 @@ def _evaluate_candidate_for_single_strategy(
                 bankroll_usd=state.current_bankroll_usd,
                 side=decision.trade_side or "NO",
                 entry_price=decision.entry_price,
+                approval_details=decision.approval_details,
             )
             state = apply_open_trade_to_state(state, open_trade)
             open_trade_payload = asdict(open_trade)
@@ -172,6 +175,15 @@ def evaluate_candidate_across_strategies(
 ) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
     strategies = build_default_strategies()
+    clob_client = PolymarketClobClient(config)
+    token_ids = list(
+        {
+            token_id
+            for token_id in [outcome.yes_token_id, outcome.no_token_id, outcome.token_id]
+            if token_id
+        }
+    )
+    token_book_map = clob_client.get_book_map(token_ids) if token_ids else {}
     with ThreadPoolExecutor(max_workers=len(strategies) or 1) as executor:
         futures = [
             executor.submit(
@@ -181,6 +193,7 @@ def evaluate_candidate_across_strategies(
                 weather,
                 config,
                 strategy,
+                token_book_map,
             )
             for strategy in strategies
         ]

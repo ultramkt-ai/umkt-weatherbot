@@ -62,3 +62,4 @@ class BotState:
     next_market_scan_at: Optional[str] = None
     next_open_trades_check_at: Optional[str] = None
     report_generated_for_100_trades: bool = False
+    last_cycle_duration_seconds: float = 0.0

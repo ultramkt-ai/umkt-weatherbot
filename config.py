@@ -36,10 +36,10 @@ class RiskConfig:
 
 @dataclass(frozen=True)
 class MarketConfig:
-    min_no_price: float = float(os.getenv("MARKET_MIN_NO_PRICE", "0.95"))
+    min_no_price: float = float(os.getenv("MARKET_MIN_NO_PRICE", "0.04"))
     max_no_price: float = float(os.getenv("MARKET_MAX_NO_PRICE", "0.999"))
-    preferred_no_price_low: float = float(os.getenv("MARKET_PREFERRED_NO_PRICE_LOW", "0.98"))
-    preferred_no_price_high: float = float(os.getenv("MARKET_PREFERRED_NO_PRICE_HIGH", "0.999"))
+    preferred_no_price_low: float = float(os.getenv("MARKET_PREFERRED_NO_PRICE_LOW", "0.06"))
+    preferred_no_price_high: float = float(os.getenv("MARKET_PREFERRED_NO_PRICE_HIGH", "0.900"))
     enable_yes_strategy: bool = os.getenv("MARKET_ENABLE_YES_STRATEGY", "true").lower() == "true"
     min_yes_price: float = float(os.getenv("MARKET_MIN_YES_PRICE", "0.00"))
     max_yes_price: float = float(os.getenv("MARKET_MAX_YES_PRICE", "0.90"))

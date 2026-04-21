@@ -169,37 +169,35 @@ def _build_copytrading_row(config) -> dict | None:
 def build_comparison_snapshot() -> dict:
     config = load_config()
     strategies = build_default_strategies()
-    rows = []
+    tournament_rows = []
     for strategy in strategies:
         state = load_or_create_strategy_state(config, strategy.strategy_id)
-        rows.append(
-            {
-                "strategy": asdict(strategy),
-                "state": {
-                    "session_id": state.session_id,
-                    "current_bankroll_usd": state.current_bankroll_usd,
-                    "current_cash_usd": state.current_cash_usd,
-                    "realized_pnl_total_usd": state.realized_pnl_total_usd,
-                    "open_trades_count": state.open_trades_count,
-                    "closed_trades_count": state.closed_trades_count,
-                    "approved_trades_count": state.approved_trades_count,
-                    "markets_scanned_today": state.markets_scanned_today,
-                    "approved_today": state.approved_today,
-                    "rejected_today": state.rejected_today,
-                    "open_exposure_pct": state.open_exposure_pct,
-                    "max_drawdown_pct": state.max_drawdown_pct,
-                    "last_score_approved": state.last_score_approved,
-                },
-                "metrics": _build_strategy_metrics(config, strategy.strategy_id, state),
-            }
-        )
+        row = {
+            "strategy": asdict(strategy),
+            "state": {
+                "session_id": state.session_id,
+                "current_bankroll_usd": state.current_bankroll_usd,
+                "current_cash_usd": state.current_cash_usd,
+                "realized_pnl_total_usd": state.realized_pnl_total_usd,
+                "open_trades_count": state.open_trades_count,
+                "closed_trades_count": state.closed_trades_count,
+                "approved_trades_count": state.approved_trades_count,
+                "markets_scanned_today": state.markets_scanned_today,
+                "approved_today": state.approved_today,
+                "rejected_today": state.rejected_today,
+                "open_exposure_pct": state.open_exposure_pct,
+                "max_drawdown_pct": state.max_drawdown_pct,
+                "last_score_approved": state.last_score_approved,
+            },
+            "metrics": _build_strategy_metrics(config, strategy.strategy_id, state),
+        }
+        tournament_rows.append(row)
     copy_row = _build_copytrading_row(config)
-    if copy_row:
-        rows.append(copy_row)
 
     payload = {
         "generated_at": now_iso(),
-        "strategies": rows,
+        "strategies": tournament_rows,
+        "copytrading": copy_row,
         "ranking_hint": sorted(
             [
                 {
@@ -208,7 +206,7 @@ def build_comparison_snapshot() -> dict:
                     'approved_decisions_logged': row['metrics']['approved_decisions_logged'],
                     'open_trades_logged': row['metrics']['open_trades_logged'],
                 }
-                for row in rows
+                for row in tournament_rows
             ],
             key=lambda item: (item['roi_vs_initial_bankroll'], item['approved_decisions_logged'], item['open_trades_logged']),
             reverse=True,

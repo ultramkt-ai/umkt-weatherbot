@@ -17,5 +17,9 @@ class StrategySpec:
     max_hours_to_resolution: float = 99999.0
     # Diferenciação por distância do limiar (°C)
     required_min_distance_threshold: float = 0.0
+    # Score mínimo real para aprovar entrada
+    min_score: int = 0
+    high_price_min_score: int = 0
+    high_price_threshold: float = 1.0
     # Cidades exclusivas por estratégia (vazio = todas permitidas)
     exclusive_cities: tuple = tuple()
